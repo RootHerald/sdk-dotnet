@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      # Build AspNetCore (pure managed, no native deps)
+      - run: dotnet restore RootHerald.AspNetCore/RootHerald.AspNetCore.csproj
+      - run: dotnet build RootHerald.AspNetCore/RootHerald.AspNetCore.csproj -c Release --no-restore
+      - run: dotnet build RootHerald.AspNetCore.Sample/RootHerald.AspNetCore.Sample.csproj -c Release
+
+      # Note: RootHerald.Native (FFI binding) is preview; CI builds it only on
+      # Windows where RootHerald.dll can be linked. Linux+macOS native runtimes
+      # are bundled in a follow-up workflow that builds across multiple runners.
