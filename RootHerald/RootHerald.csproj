@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RootHerald</RootNamespace>
+    <AssemblyName>RootHerald</AssemblyName>
+
+    <!-- NuGet metadata -->
+    <PackageId>RootHerald.Native</PackageId>
+    <Version>1.0.0-preview.1</Version>
+    <Authors>Root Herald</Authors>
+    <Company>Root Herald</Company>
+    <Product>Root Herald Native SDK</Product>
+    <Description>
+      Idiomatic .NET wrapper around the Root Herald native embeddable SDK
+      (RootHerald.dll / librootherald). Hardware-backed device attestation
+      via TPM 2.0 on Windows, Secure Enclave on macOS, hardware key
+      attestation on Android, App Attest on iOS — same wire across all
+      surfaces.
+    </Description>
+    <PackageTags>attestation;tpm;device-identity;rootherald;security</PackageTags>
+    <RepositoryUrl>https://github.com/malwarebutters/RootHerald</RepositoryUrl>
+    <PackageProjectUrl>https://rootherald.io</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+    <!-- Build outputs -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+  </PropertyGroup>
+
+  <!--
+    Native runtime bundling. The native DLL is staged under
+    runtimes/<rid>/native/ so the .NET host's native-loader picks the
+    right binary for the current platform. Wave 2 ships win-x64; macOS /
+    Linux RIDs land in Wave 3 once those clients are extracted.
+
+    The runtime bundling is wired but the files won't exist until CMake
+    has been run with the appropriate platform; the project still builds
+    fine on machines without the native binary present, since the
+    `Condition="Exists(...)"` guard skips missing files.
+  -->
+  <ItemGroup>
+    <None Include="..\..\..\build\windows\Release\RootHerald.dll"
+          Pack="true"
+          PackagePath="runtimes/win-x64/native/RootHerald.dll"
+          Condition="Exists('..\..\..\build\windows\Release\RootHerald.dll')" />
+  </ItemGroup>
+
+</Project>

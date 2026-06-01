@@ -1,0 +1,71 @@
+using RootHerald.AspNetCore;
+
+// Minimal ASP.NET Core API that gates routes on Root Herald attestation.
+// Run against the local dev stack (Root Herald API on http://localhost) — the
+// sample's audience matches the seeded test relying party `plat_test_rp`.
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddRootHeraldAuthentication(options =>
+{
+    options.Issuer = builder.Configuration["RootHerald:Issuer"] ?? "http://localhost";
+    options.Audience = builder.Configuration["RootHerald:Audience"] ?? "plat_test_rp";
+});
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("RootHeraldAttested",
+        policy => policy.RequireRootHerald());
+});
+
+var app = builder.Build();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/", () => "RootHerald.AspNetCore sample — POST a Bearer JWT to /me");
+
+// Diagnostic endpoint: dumps ALL claims as the JwtBearer handler surfaced them.
+// Lets us see whether the rootherald_device claim is reaching the principal
+// and what shape it has.
+app.MapGet("/_diag", (HttpContext ctx) =>
+{
+    var principal = ctx.User;
+    if (principal?.Identity?.IsAuthenticated != true)
+        return Results.Json(new { authenticated = false });
+    var verdict = ctx.GetRootHeraldVerdict();
+    return Results.Json(new
+    {
+        authenticated = true,
+        identityName = principal.Identity?.Name,
+        claims = principal.Claims.Select(c => new { c.Type, c.Value }).ToArray(),
+        verdictPresent = verdict is not null,
+        verdict,
+    });
+}).RequireAuthorization();
+
+app.MapGet("/me", (HttpContext ctx) =>
+{
+    var verdict = ctx.GetRootHeraldVerdict();
+    if (verdict is null) return Results.Unauthorized();
+    return Results.Json(new
+    {
+        ok = true,
+        userId = verdict.UserId,
+        audience = verdict.Audience,
+        acr = verdict.Acr,
+        amr = verdict.Amr,
+        expiresAt = verdict.ExpiresAt,
+        device = new
+        {
+            deviceId = verdict.Device.DeviceId,
+            verdict = verdict.Device.Verdict,
+            earStatus = verdict.Device.EarStatus,
+            tpmClass = verdict.Device.TpmClass,
+            platform = verdict.Device.Platform,
+            attestationType = verdict.Device.AttestationType,
+            policyId = verdict.Device.PolicyId,
+        }
+    });
+}).RequireAuthorization("RootHeraldAttested");
+
+app.Run();
