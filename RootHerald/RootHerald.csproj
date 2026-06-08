@@ -22,7 +22,7 @@
       surfaces.
     </Description>
     <PackageTags>attestation;tpm;device-identity;rootherald;security</PackageTags>
-    <RepositoryUrl>https://github.com/malwarebutters/RootHerald</RepositoryUrl>
+    <RepositoryUrl>https://github.com/RootHerald/sdk-dotnet</RepositoryUrl>
     <PackageProjectUrl>https://rootherald.io</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
 
