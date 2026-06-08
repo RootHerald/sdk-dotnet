@@ -10,9 +10,8 @@ namespace RootHerald;
 /// </summary>
 internal static class NativeMethods
 {
-    // Native library name. The .NET runtime resolves the actual file on
-    // each platform (RootHerald.dll on Windows, librootherald.so on Linux,
-    // librootherald.dylib on macOS).
+    // The .NET native-loader maps this to the per-platform file
+    // (RootHerald.dll / librootherald.so / librootherald.dylib).
     internal const string LibraryName = "RootHerald";
 
     internal const int ROOTHERALD_OK = 0;
