@@ -43,7 +43,7 @@ public sealed class RootHeraldException : Exception
 
 /// <summary>
 /// Idiomatic .NET wrapper over RootHerald.dll. The native ABI is sync, so
-/// <see cref="VerifyAsync"/> dispatches through <see cref="Task.Run"/> to
+/// <see cref="VerifyAsync"/> dispatches through <c>Task.Run</c> to
 /// keep the calling thread unblocked. Implements <see cref="IDisposable"/>
 /// so the native handle is always released.
 ///
