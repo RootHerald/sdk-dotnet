@@ -43,7 +43,20 @@ public sealed record AttestResult
     /// <summary>Normalised verdict: <c>"allow"</c>, <c>"deny"</c>, or <c>"review"</c>.</summary>
     public required string Verdict { get; init; }
 
-    /// <summary>The full verdict object returned by the server.</summary>
+    /// <summary>
+    /// The full verdict object returned by the server, passed through verbatim.
+    /// <para>
+    /// In addition to the per-device appraisal under <c>device</c>, when a
+    /// quote-bound event log was supplied the server populates ADDITIVE,
+    /// advisory-only cohort fields on <c>device</c> (camelCase on the wire;
+    /// absent/null otherwise) — never a trust gate:
+    /// <c>cohortKey</c> (string), <c>cohortScope</c> ("global"|"tenant-fleet"),
+    /// <c>cohortPrevalence</c> (number|null),
+    /// <c>cohortPrevalencePerPcr</c> (object), <c>cohortSampleSize</c> (number|null),
+    /// <c>novelProfile</c> (bool|null). Because the verdict is exposed as a raw
+    /// <see cref="JsonNode"/>, these flow through with no type change.
+    /// </para>
+    /// </summary>
     public required JsonNode VerdictData { get; init; }
 
     /// <summary>The signed EAT, or <c>null</c> if not requested/returned.</summary>
@@ -72,7 +85,7 @@ public sealed record AttestResult
 public sealed class RootHeraldBackgroundCheckClient
 {
     /// <summary>Production Root Herald API base URL.</summary>
-    public const string DefaultBaseUrl = "https://api.rootherald.com";
+    public const string DefaultBaseUrl = "https://api.rootherald.io";
 
     private const string SecretKeyPrefix = "rh_sk_";
 
