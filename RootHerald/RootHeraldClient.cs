@@ -159,21 +159,17 @@ public sealed class RootHeraldClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        if (_handle != IntPtr.Zero)
-        {
-            NativeMethods.Destroy(_handle);
-            _handle = IntPtr.Zero;
-        }
+        ReleaseHandle();
         GC.SuppressFinalize(this);
     }
 
     /// <summary>Finalizer — last-ditch cleanup if the caller forgot Dispose.</summary>
-    ~RootHeraldClient()
+    ~RootHeraldClient() => ReleaseHandle();
+
+    private void ReleaseHandle()
     {
-        if (_handle != IntPtr.Zero)
-        {
-            NativeMethods.Destroy(_handle);
-            _handle = IntPtr.Zero;
-        }
+        if (_handle == IntPtr.Zero) return;
+        NativeMethods.Destroy(_handle);
+        _handle = IntPtr.Zero;
     }
 }
