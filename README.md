@@ -60,11 +60,11 @@ var rh = new RootHeraldBackgroundCheckClient(
     Environment.GetEnvironmentVariable("ROOTHERALD_SECRET_KEY")!);
 
 // 1) Mint a relay-friendly nonce; send challenge.Nonce down to the client.
-var challenge = await rh.CreateChallengeAsync();
+var challenge = await rh.IssueChallengeAsync();
 
 // 2) The client quotes over the nonce and returns an opaque evidence blob
 //    (JsonNode); submit it for appraisal.
-var result = await rh.AttestAsync(evidence, new AttestOptions
+var result = await rh.VerifyAsync(evidence, new AttestOptions
 {
     ChallengeId = challenge.ChallengeId,
     Policy      = "rootherald:builtin:strict-hardware", // optional
@@ -72,6 +72,42 @@ var result = await rh.AttestAsync(evidence, new AttestOptions
 });
 
 if (result.IsAllowed) { /* proceed; result.Token is verifiable offline */ }
+```
+
+> `CreateChallengeAsync` / `AttestAsync` are retained as `[Obsolete]` aliases of
+> `IssueChallengeAsync` / `VerifyAsync` for backwards compatibility.
+
+## Quick start — Enroll relay (one-time device bootstrap)
+
+The keyless client produces opaque enroll blobs; your backend relays them to Root
+Herald with the `rh_sk_` secret. The two-leg handshake is asymmetric — a fresh
+device returns a MakeCredential challenge (`201`), an already-bound device
+short-circuits (`409`, skip the activate leg).
+
+```csharp
+// Leg 1 — relay the client's EnrollBegin() blob.
+var enroll = await rh.RelayEnrollAsync(new EnrollRequestBlob
+{
+    EkPublicKey  = blob.EkPublicKey,   // base64 EK public
+    AkPublicArea = blob.AkPublicArea,  // base64 TPM2B_PUBLIC of the AK
+    Platform     = "windows",
+    EkCertPem    = blob.EkCertPem,     // optional
+});
+
+if (enroll.AlreadyEnrolled)
+{
+    // Device already bound — use enroll.DeviceId, no activate leg.
+}
+else
+{
+    // Hand enroll.Challenge to the client's EnrollComplete(); then relay leg 2.
+    var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
+    {
+        DeviceId        = enroll.DeviceId,
+        DecryptedSecret = clientResult.DecryptedSecret,
+    });
+    // activated.DeviceId is the stable id you map to your user.
+}
 ```
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an

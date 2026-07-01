@@ -48,9 +48,9 @@ app.MapPost("/attest", async (HttpContext ctx, RootHeraldBackgroundCheckClient? 
     var evidence = await ctx.Request.ReadFromJsonAsync<JsonNode>() ?? new JsonObject();
     // 1) mint a nonce; in production hand challenge.Nonce to the client first,
     //    then receive the evidence it produced. Compressed here.
-    var challenge = await rh.CreateChallengeAsync();
+    var challenge = await rh.IssueChallengeAsync();
     // 2) appraise the opaque evidence the client posted.
-    var result = await rh.AttestAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
+    var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
     return result.IsAllowed
         ? Results.Json(new { ok = true, verdict = result.Verdict })
         // An un-enrolled / failing device is a verdict, not an error.

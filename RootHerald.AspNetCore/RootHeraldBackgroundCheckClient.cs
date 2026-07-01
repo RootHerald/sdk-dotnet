@@ -124,12 +124,12 @@ public sealed class RootHeraldBackgroundCheckClient
     /// <c>POST /api/v1/attestations/challenge</c> — mint a relay-friendly nonce.
     /// Relay <see cref="RootHeraldChallenge.Nonce"/> to the client; it quotes
     /// over it, then submit the resulting evidence with
-    /// <see cref="AttestAsync"/> using
+    /// <see cref="VerifyAsync"/> using
     /// <see cref="RootHeraldChallenge.ChallengeId"/>.
     /// </summary>
     /// <param name="deviceHint">Optional advisory hint identifying the device.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
-    public async Task<RootHeraldChallenge> CreateChallengeAsync(
+    public async Task<RootHeraldChallenge> IssueChallengeAsync(
         string? deviceHint = null, CancellationToken cancellationToken = default)
     {
         var body = new JsonObject();
@@ -144,6 +144,15 @@ public sealed class RootHeraldBackgroundCheckClient
             throw new RootHeraldApiException(200, "challenge response missing challengeId/nonce/expiresAt");
         return new RootHeraldChallenge(id, nonce, expiresAt);
     }
+
+    /// <summary>
+    /// Renamed to <see cref="IssueChallengeAsync"/> for the ABI 3.0 backend
+    /// contract. Retained as a thin alias for backwards compatibility.
+    /// </summary>
+    [Obsolete("Renamed to IssueChallengeAsync for the ABI 3.0 backend contract.")]
+    public Task<RootHeraldChallenge> CreateChallengeAsync(
+        string? deviceHint = null, CancellationToken cancellationToken = default) =>
+        IssueChallengeAsync(deviceHint, cancellationToken);
 
     /// <summary>
     /// <c>POST /api/v1/attestations/verify</c> — submit the opaque evidence blob
@@ -162,13 +171,13 @@ public sealed class RootHeraldBackgroundCheckClient
     /// </param>
     /// <param name="options">Attest options carrying the challenge id and optional policy/returnToken.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
-    public async Task<AttestResult> AttestAsync(
+    public async Task<AttestResult> VerifyAsync(
         JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(options);
         if (string.IsNullOrEmpty(options.ChallengeId))
-            throw new ArgumentException("AttestOptions.ChallengeId is required (from CreateChallengeAsync)", nameof(options));
+            throw new ArgumentException("AttestOptions.ChallengeId is required (from IssueChallengeAsync)", nameof(options));
 
         var body = new JsonObject
         {
@@ -195,9 +204,129 @@ public sealed class RootHeraldBackgroundCheckClient
         };
     }
 
-    private async Task<JsonNode> PostAsync(string path, JsonNode body, CancellationToken cancellationToken)
+    /// <summary>
+    /// Renamed to <see cref="VerifyAsync"/> for the ABI 3.0 backend contract.
+    /// Retained as a thin alias for backwards compatibility.
+    /// </summary>
+    [Obsolete("Renamed to VerifyAsync for the ABI 3.0 backend contract.")]
+    public Task<AttestResult> AttestAsync(
+        JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default) =>
+        VerifyAsync(evidence, options, cancellationToken);
+
+    /// <summary>
+    /// Enroll relay — leg 1. <c>POST /api/v1/devices/enroll</c>.
+    /// <para>
+    /// Relays the client's <c>EnrollBegin()</c> blob to Root Herald with the
+    /// <c>rh_sk_</c> secret and resolves the asymmetric response into a
+    /// <see cref="RelayEnrollResult"/>:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <c>201</c> — a fresh enroll: returns
+    ///     <c>{ AlreadyEnrolled = false, DeviceId, Challenge }</c>. Hand
+    ///     <see cref="RelayEnrollResult.Challenge"/> to the client's
+    ///     <c>EnrollComplete</c>, then relay the result to
+    ///     <see cref="RelayActivateAsync"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>409</c> — the device is already enrolled: returns
+    ///     <c>{ AlreadyEnrolled = true, DeviceId }</c> (no challenge, no throw).
+    ///     SKIP the activate leg.
+    ///   </description></item>
+    /// </list>
+    /// The client never holds the <c>rh_sk_</c> key and never talks to Root
+    /// Herald; this backend helper is the only thing that does.
+    /// </para>
+    /// </summary>
+    /// <param name="enrollRequestBlob">The opaque enroll-begin blob from the client.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
+    public async Task<RelayEnrollResult> RelayEnrollAsync(
+        EnrollRequestBlob enrollRequestBlob, CancellationToken cancellationToken = default)
     {
-        using var response = await _http.PostAsJsonAsync(path, body, cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(enrollRequestBlob);
+        if (string.IsNullOrEmpty(enrollRequestBlob.EkPublicKey) ||
+            string.IsNullOrEmpty(enrollRequestBlob.AkPublicArea))
+            throw new ArgumentException(
+                "enroll request blob requires ekPublicKey and akPublicArea", nameof(enrollRequestBlob));
+
+        using var response = await RawPostAsync("api/v1/devices/enroll", enrollRequestBlob, cancellationToken)
+            .ConfigureAwait(false);
+
+        // 409 = already enrolled: the body carries only deviceId. Resolve it and
+        // signal "skip activate" instead of treating it as an error.
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            var body = await ReadJsonObjectAsync(response, cancellationToken).ConfigureAwait(false);
+            var deviceId = body?["deviceId"]?.GetValue<string>();
+            if (string.IsNullOrEmpty(deviceId))
+                throw new RootHeraldApiException(409, "already-enrolled (409) response missing deviceId");
+            return new RelayEnrollResult { AlreadyEnrolled = true, DeviceId = deviceId };
+        }
+
+        if (!response.IsSuccessStatusCode)
+            throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
+
+        var challenge = await response.Content
+            .ReadFromJsonAsync<EnrollActivationChallenge>(cancellationToken).ConfigureAwait(false);
+        if (challenge is null ||
+            string.IsNullOrEmpty(challenge.DeviceId) ||
+            string.IsNullOrEmpty(challenge.CredentialBlob) ||
+            string.IsNullOrEmpty(challenge.EncryptedSecret))
+            throw new RootHeraldApiException(
+                (int)response.StatusCode,
+                "enroll response missing deviceId/credentialBlob/encryptedSecret");
+
+        return new RelayEnrollResult
+        {
+            AlreadyEnrolled = false,
+            DeviceId = challenge.DeviceId,
+            Challenge = challenge,
+        };
+    }
+
+    /// <summary>
+    /// Enroll relay — leg 2. <c>POST /api/v1/devices/activate</c>.
+    /// <para>
+    /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
+    /// secret) to Root Herald, completing the EK→AK credential-activation
+    /// handshake. Call this only when <see cref="RelayEnrollAsync"/> returned
+    /// <see cref="RelayEnrollResult.AlreadyEnrolled"/> = <c>false</c>.
+    /// </para>
+    /// Returns the terminal <c>{ deviceId, status, enrolledAt }</c> body;
+    /// <see cref="RelayActivateResponse.DeviceId"/> is the load-bearing field the
+    /// backend maps to its user.
+    /// </summary>
+    /// <param name="activationResponse">The opaque enroll-complete blob from the client.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
+    public async Task<RelayActivateResponse> RelayActivateAsync(
+        EnrollActivationResponse activationResponse, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(activationResponse);
+        if (string.IsNullOrEmpty(activationResponse.DeviceId) ||
+            string.IsNullOrEmpty(activationResponse.DecryptedSecret))
+            throw new ArgumentException(
+                "activation response requires deviceId and decryptedSecret", nameof(activationResponse));
+
+        var data = await PostAsync("api/v1/devices/activate", activationResponse, cancellationToken)
+            .ConfigureAwait(false);
+        var deviceId = data["deviceId"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(deviceId))
+            throw new RootHeraldApiException(200, "activate response missing deviceId");
+
+        return new RelayActivateResponse
+        {
+            DeviceId = deviceId,
+            Status = data["status"]?.GetValue<string>(),
+            EnrolledAt = data["enrolledAt"]?.GetValue<string>(),
+        };
+    }
+
+    /// <summary>
+    /// Issues an authenticated JSON POST and returns the parsed JSON body, mapping
+    /// non-2xx responses to the typed <see cref="RootHeraldApiException"/> taxonomy.
+    /// </summary>
+    private async Task<JsonNode> PostAsync(string path, object body, CancellationToken cancellationToken)
+    {
+        using var response = await RawPostAsync(path, body, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
 
@@ -205,6 +334,29 @@ public sealed class RootHeraldBackgroundCheckClient
         if (node is null)
             throw new RootHeraldApiException((int)response.StatusCode, "empty Root Herald response");
         return node;
+    }
+
+    /// <summary>
+    /// Issues an authenticated JSON POST and returns the raw response. Status
+    /// interpretation is left to the caller (used by the enroll relay, which must
+    /// inspect the <c>409 already-enrolled</c> short-circuit).
+    /// </summary>
+    private Task<HttpResponseMessage> RawPostAsync(string path, object body, CancellationToken cancellationToken) =>
+        _http.PostAsJsonAsync(path, body, cancellationToken);
+
+    /// <summary>Reads a response body as a JSON object, tolerating an empty/odd body.</summary>
+    private static async Task<JsonObject?> ReadJsonObjectAsync(
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var node = await response.Content.ReadFromJsonAsync<JsonNode>(cancellationToken).ConfigureAwait(false);
+            return node as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static async Task<RootHeraldApiException> ToApiExceptionAsync(
