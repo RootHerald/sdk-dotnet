@@ -22,6 +22,9 @@ jobs:
       - run: dotnet build RootHerald.AspNetCore/RootHerald.AspNetCore.csproj -c Release --no-restore
       - run: dotnet build RootHerald.AspNetCore.Sample/RootHerald.AspNetCore.Sample.csproj -c Release
 
+      # Unit-test the backend-relay client (mocked HttpClient, no network)
+      - run: dotnet test RootHerald.AspNetCore.Tests/RootHerald.AspNetCore.Tests.csproj -c Release
+
       # Note: RootHerald.Native (FFI binding) is preview; CI builds it only on
       # Windows where RootHerald.dll can be linked. Linux+macOS native runtimes
       # are bundled in a follow-up workflow that builds across multiple runners.
