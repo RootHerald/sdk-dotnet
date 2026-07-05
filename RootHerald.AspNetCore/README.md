@@ -1,6 +1,6 @@
 # RootHerald.AspNetCore
 
-ASP.NET Core authentication for Root Herald device attestation tokens. Pure managed C# — no native dependencies, no DLL bundling, single-file publish works trivially.
+ASP.NET Core authentication for Root Herald device attestation tokens. Pure managed C#, with no native dependencies and no DLL bundling, so single-file publish works without extra steps.
 
 ## Install
 
@@ -121,7 +121,7 @@ app.MapPost("/wire-money", (HttpContext ctx) =>
 | `Audience` (required) | — | Your `client_id`. Tokens whose `aud` doesn't match are rejected. |
 | `ClockSkew` | 30 seconds | Tolerance applied to `exp`/`nbf` checks. Set `TimeSpan.Zero` for strict mode. |
 | `Scheme` | `"RootHerald"` | Authentication scheme name. Change only if you have multiple JwtBearer handlers. |
-| `SetAsDefaultScheme` | `true` | If false, RootHerald is registered but not made the app default — useful when you also have cookie auth for non-API routes. |
+| `SetAsDefaultScheme` | `true` | If false, RootHerald is registered but not made the app default; useful when you also have cookie auth for non-API routes. |
 
 ## Targets
 
