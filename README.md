@@ -9,7 +9,7 @@
 | [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldBackgroundCheckClient` (appraise a client-collected evidence blob with your `rh_sk_` secret key); **badge tier** offline JWT verify via `AddRootHeraldAuthentication(...)`, `HttpContext.GetRootHeraldVerdict()`, `RequireRootHerald()` | Backend (any OS .NET runs on) | **GA** |
 | [`RootHerald.Native`](./RootHerald) | FFI binding to the native client SDK (`RootHerald.dll`/`librootherald.so`/`RootHeraldKit`) — drive TPM attestation from C# desktop apps | Desktop (Win/Linux/macOS) | Preview — see below |
 
-## Quick start — ASP.NET Core (backend verify)
+## Quick start: ASP.NET Core (backend verify)
 
 ```bash
 dotnet add package RootHerald.AspNetCore
@@ -44,7 +44,7 @@ Pure managed C#. No native dependencies. Single-file publish (`PublishSingleFile
 
 See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md) for the full surface (claims, policies, common patterns).
 
-## Quick start — Background-Check (server → server)
+## Quick start: Background-Check (server → server)
 
 Your dumb client collects an opaque evidence blob and hands it to *your* server,
 which appraises it with Root Herald using your `rh_sk_` secret key. The client
@@ -77,10 +77,10 @@ if (result.IsAllowed) { /* proceed; result.Token is verifiable offline */ }
 > `CreateChallengeAsync` / `AttestAsync` are retained as `[Obsolete]` aliases of
 > `IssueChallengeAsync` / `VerifyAsync` for backwards compatibility.
 
-## Quick start — Enroll relay (one-time device bootstrap)
+## Quick start: Enroll relay (one-time device bootstrap)
 
 The keyless client produces opaque enroll blobs; your backend relays them to Root
-Herald with the `rh_sk_` secret. The two-leg handshake is asymmetric — a fresh
+Herald with the `rh_sk_` secret. The two-leg handshake is asymmetric: a fresh
 device returns a MakeCredential challenge (`201`), an already-bound device
 short-circuits (`409`, skip the activate leg).
 
@@ -111,11 +111,11 @@ else
 ```
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an
-exception. Only protocol/auth/quota problems throw — `InvalidSecretKeyException`
+exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`
 (401), `UnknownPolicyException` (422), `ChallengeException` (409),
 `InvalidEvidenceException` (400), `QuotaExceededException` (429).
 
-## Quick start — Native desktop (preview, deferred)
+## Quick start: Native desktop (preview, deferred)
 
 ```bash
 dotnet add package RootHerald.Native --prerelease
