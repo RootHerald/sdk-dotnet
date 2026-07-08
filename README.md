@@ -6,45 +6,14 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldBackgroundCheckClient` (appraise a client-collected evidence blob with your `rh_sk_` secret key); **badge tier** offline JWT verify via `AddRootHeraldAuthentication(...)`, `HttpContext.GetRootHeraldVerdict()`, `RequireRootHerald()` | Backend (any OS .NET runs on) | **GA** |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldBackgroundCheckClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **GA** |
 | [`RootHerald.Native`](./RootHerald) | FFI binding to the native client SDK (`RootHerald.dll`/`librootherald.so`/`RootHeraldKit`) — drive TPM attestation from C# desktop apps | Desktop (Win/Linux/macOS) | Preview — see below |
 
-## Quick start: ASP.NET Core (backend verify)
+## Quick start: Background-Check (server → server)
 
 ```bash
 dotnet add package RootHerald.AspNetCore
 ```
-
-```csharp
-using RootHerald.AspNetCore;
-
-var builder = WebApplication.CreateBuilder(args);
-
-builder.Services.AddRootHeraldAuthentication(o =>
-{
-    o.Issuer = "https://api.rootherald.io";
-    o.Audience = "plat_your_client_id";
-});
-
-builder.Services.AddAuthorization(o =>
-    o.AddPolicy("RootHeraldAttested", p => p.RequireRootHerald()));
-
-var app = builder.Build();
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapGet("/me", (HttpContext ctx) =>
-    Results.Json(new { device = ctx.GetRootHeraldVerdict()?.Device.DeviceId }))
-   .RequireAuthorization("RootHeraldAttested");
-
-app.Run();
-```
-
-Pure managed C#. No native dependencies. Single-file publish (`PublishSingleFile=true`) produces a single .exe with no `RootHerald.dll` shipped alongside.
-
-See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md) for the full surface (claims, policies, common patterns).
-
-## Quick start: Background-Check (server → server)
 
 Your dumb client collects an opaque evidence blob and hands it to *your* server,
 which appraises it with Root Herald using your `rh_sk_` secret key. The client
@@ -54,8 +23,8 @@ never holds a key or talks to Root Herald.
 using System.Text.Json.Nodes;
 using RootHerald.AspNetCore;
 
-// Construct with your SECRET key (rh_sk_…). A publishable key (rh_pk_…) is
-// rejected — it must never be used server-side.
+// Construct with your SECRET key (rh_sk_…). Any key without the rh_sk_ prefix
+// is rejected.
 var rh = new RootHeraldBackgroundCheckClient(
     Environment.GetEnvironmentVariable("ROOTHERALD_SECRET_KEY")!);
 
@@ -68,11 +37,14 @@ var result = await rh.VerifyAsync(evidence, new AttestOptions
 {
     ChallengeId = challenge.ChallengeId,
     Policy      = "rootherald:builtin:strict-hardware", // optional
-    ReturnToken = true,                                 // optional signed EAT
 });
 
-if (result.IsAllowed) { /* proceed; result.Token is verifiable offline */ }
+if (result.IsAllowed) { /* proceed */ }
 ```
+
+Pure managed C#. No native dependencies. Single-file publish works with no DLL
+shipped alongside. See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md)
+for the full surface (verdict shape, enroll relay, common patterns).
 
 > `CreateChallengeAsync` / `AttestAsync` are retained as `[Obsolete]` aliases of
 > `IssueChallengeAsync` / `VerifyAsync` for backwards compatibility.
@@ -142,9 +114,9 @@ Both packages multi-target. Major .NET versions are added as they hit LTS.
 
 ## Trust chain
 
-For `RootHerald.AspNetCore`: token signatures are verified against Root Herald's JWKS at `{Issuer}/.well-known/jwks.json`. The underlying `Microsoft.IdentityModel.Protocols.OpenIdConnect` `ConfigurationManager` handles key rotation and caching automatically.
+For `RootHerald.AspNetCore`: the client-collected evidence is appraised server-side by Root Herald, authenticated by your `rh_sk_` secret key. The verdict is computed by Root Herald and returned to your backend; the client never holds a key or receives a verdict.
 
-For `RootHerald.Native`: the native client SDK signs attestation evidence with platform-bound keys (TPM AK on Windows/Linux, Secure Enclave key on macOS). Root Herald verifies server-side; the resulting JWT is signed by Root Herald's JWKS.
+For `RootHerald.Native`: the native client SDK signs attestation evidence with platform-bound keys (TPM AK on Windows/Linux, Secure Enclave key on macOS). Root Herald verifies server-side and returns the verdict.
 
 ## License
 
