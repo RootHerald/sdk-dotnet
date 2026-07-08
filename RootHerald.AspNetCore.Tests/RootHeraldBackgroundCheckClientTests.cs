@@ -25,10 +25,10 @@ public class RootHeraldBackgroundCheckClientTests
     }
 
     [Fact]
-    public void Constructor_rejects_publishable_key()
+    public void Constructor_rejects_invalid_prefix_key()
     {
         var ex = Assert.Throws<ArgumentException>(
-            () => new RootHeraldBackgroundCheckClient("rh_pk_live_nope"));
+            () => new RootHeraldBackgroundCheckClient("rh_bogus_nope"));
         Assert.Contains("rh_sk_", ex.Message);
     }
 
@@ -70,23 +70,21 @@ public class RootHeraldBackgroundCheckClientTests
     // ── Verify ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task VerifyAsync_maps_pass_to_allow_and_passes_token()
+    public async Task VerifyAsync_maps_pass_to_allow()
     {
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK,
-            """{"verdict":{"verdict":"pass","ueid":"dev_1"},"token":"eyJ.signed.jwt"}""");
+            """{"verdict":{"verdict":"pass","ueid":"dev_1"}}""");
 
         var result = await client.VerifyAsync(
             JsonNode.Parse("""{"evidence":"opaque"}""")!,
-            new AttestOptions { ChallengeId = "chal_1", Policy = "p", ReturnToken = true });
+            new AttestOptions { ChallengeId = "chal_1", Policy = "p" });
 
         Assert.Equal("allow", result.Verdict);
         Assert.True(result.IsAllowed);
-        Assert.Equal("eyJ.signed.jwt", result.Token);
         Assert.Equal("/api/v1/attestations/verify", handler.LastRequestPath);
         Assert.Equal("chal_1", handler.LastBody?["challengeId"]?.GetValue<string>());
         Assert.Equal("p", handler.LastBody?["policy"]?.GetValue<string>());
-        Assert.True(handler.LastBody?["returnToken"]?.GetValue<bool>());
         // Evidence is passed through verbatim.
         Assert.Equal("opaque", handler.LastBody?["evidence"]?["evidence"]?.GetValue<string>());
     }
@@ -102,7 +100,6 @@ public class RootHeraldBackgroundCheckClientTests
 
         Assert.Equal("deny", result.Verdict);
         Assert.False(result.IsAllowed);
-        Assert.Null(result.Token);
     }
 
     [Fact]

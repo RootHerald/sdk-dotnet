@@ -5,7 +5,7 @@ using RootHerald;
 // resulting exe). Use --mock to run without a TPM.
 
 bool mock = args.Contains("--mock");
-string apiKey = Environment.GetEnvironmentVariable("ROOTHERALD_API_KEY") ?? "rh_pk_test_demo";
+string apiKey = Environment.GetEnvironmentVariable("ROOTHERALD_API_KEY") ?? "rh_sk_test_demo";
 string? endpoint = Environment.GetEnvironmentVariable("ROOTHERALD_ENDPOINT");
 
 Console.WriteLine("Root Herald .NET sample");

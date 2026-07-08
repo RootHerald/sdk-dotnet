@@ -28,15 +28,11 @@ public sealed record AttestOptions
     /// <c>rootherald:builtin:*</c> name. Unknown/foreign names fail closed (422).
     /// </summary>
     public string? Policy { get; init; }
-
-    /// <summary>Opt-in signed EAT (JWT) output. Default false.</summary>
-    public bool ReturnToken { get; init; }
 }
 
 /// <summary>
 /// The result of <see cref="RootHeraldBackgroundCheckClient.AttestAsync"/>: the
-/// normalised verdict, the full verdict node, and an optional signed EAT (JWT)
-/// when <see cref="AttestOptions.ReturnToken"/> was requested.
+/// normalised verdict and the full verdict node.
 /// </summary>
 public sealed record AttestResult
 {
@@ -59,9 +55,6 @@ public sealed record AttestResult
     /// </summary>
     public required JsonNode VerdictData { get; init; }
 
-    /// <summary>The signed EAT, or <c>null</c> if not requested/returned.</summary>
-    public string? Token { get; init; }
-
     /// <summary>True when the verdict is <c>"allow"</c>.</summary>
     public bool IsAllowed => string.Equals(Verdict, "allow", StringComparison.OrdinalIgnoreCase);
 }
@@ -74,11 +67,6 @@ public sealed record AttestResult
 /// uses this client, authenticated with its <c>rh_sk_</c> secret key, to mint a
 /// relay-friendly nonce (<see cref="CreateChallengeAsync"/>) and submit the
 /// evidence for appraisal (<see cref="AttestAsync"/>).
-/// </para>
-/// <para>
-/// This is ADDITIVE to the badge-tier (offline JWT verify) path provided by
-/// <c>AddRootHeraldAuthentication</c>. The optional token returned by attest
-/// with <see cref="AttestOptions.ReturnToken"/> is itself verifiable there.
 /// </para>
 /// Pure managed C# over <see cref="HttpClient"/>; no native dependencies.
 /// </summary>
@@ -96,8 +84,8 @@ public sealed class RootHeraldBackgroundCheckClient
     /// Create a Background-Check client.
     /// </summary>
     /// <param name="secretKey">
-    /// Your Root Herald secret key (<c>rh_sk_…</c>). Required. A publishable key
-    /// (<c>rh_pk_…</c>) is rejected — it must never be used server-side.
+    /// Your Root Herald secret key (<c>rh_sk_…</c>). Required. Used server-side
+    /// as a Bearer token; any value not starting with <c>rh_sk_</c> is rejected.
     /// </param>
     /// <param name="baseUrl">API base URL. Defaults to the production API.</param>
     /// <param name="httpClient">
@@ -110,7 +98,7 @@ public sealed class RootHeraldBackgroundCheckClient
             throw new ArgumentException("a secret key (rh_sk_…) is required", nameof(secretKey));
         if (!secretKey.StartsWith(SecretKeyPrefix, StringComparison.Ordinal))
             throw new ArgumentException(
-                "secretKey must be a secret key (rh_sk_…); a publishable key (rh_pk_…) must never be used server-side",
+                "RootHerald secret key must start with rh_sk_",
                 nameof(secretKey));
 
         _ownsHttp = httpClient is null;
@@ -156,8 +144,7 @@ public sealed class RootHeraldBackgroundCheckClient
 
     /// <summary>
     /// <c>POST /api/v1/attestations/verify</c> — submit the opaque evidence blob
-    /// for server-side appraisal and return the verdict (plus an optional signed
-    /// EAT when <see cref="AttestOptions.ReturnToken"/> is set).
+    /// for server-side appraisal and return the verdict.
     /// <para>
     /// An un-enrolled / failing device is NOT an error — it returns a normal
     /// <see cref="AttestResult"/> carrying a <c>"deny"</c>/<c>"review"</c>
@@ -169,7 +156,7 @@ public sealed class RootHeraldBackgroundCheckClient
     /// Opaque blob from the client collector, as a <see cref="JsonNode"/>; passed
     /// through verbatim.
     /// </param>
-    /// <param name="options">Attest options carrying the challenge id and optional policy/returnToken.</param>
+    /// <param name="options">Attest options carrying the challenge id and optional policy.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<AttestResult> VerifyAsync(
         JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default)
@@ -186,7 +173,6 @@ public sealed class RootHeraldBackgroundCheckClient
             ["evidence"] = evidence.DeepClone(),
         };
         if (options.Policy is not null) body["policy"] = options.Policy;
-        if (options.ReturnToken) body["returnToken"] = true;
 
         var data = await PostAsync("api/v1/attestations/verify", body, cancellationToken)
             .ConfigureAwait(false);
@@ -195,12 +181,10 @@ public sealed class RootHeraldBackgroundCheckClient
             throw new RootHeraldApiException(200, "verify response missing verdict");
 
         var raw = verdictNode["verdict"]?.GetValue<string>();
-        var token = data["token"]?.GetValue<string>();
         return new AttestResult
         {
             Verdict = Normalize(raw),
             VerdictData = verdictNode,
-            Token = token,
         };
     }
 

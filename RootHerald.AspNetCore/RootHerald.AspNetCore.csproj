@@ -15,12 +15,11 @@
     <Product>Root Herald ASP.NET Core SDK</Product>
     <Description>
       ASP.NET Core integration for Root Herald device attestation. Pure
-      managed C# — verifies attestation JWTs against the Root Herald JWKS
-      with one-line setup, exposes strongly-typed device verdicts via
-      HttpContext, and ships authorization policies for gating routes.
-      No native dependencies.
+      managed C# server-to-server Background-Check client: relay a
+      client-collected evidence blob to Root Herald with your rh_sk_ secret
+      key and get back a device verdict. No native dependencies.
     </Description>
-    <PackageTags>attestation;tpm;jwt;authentication;aspnetcore;device-identity;rootherald</PackageTags>
+    <PackageTags>attestation;tpm;device-identity;aspnetcore;rootherald</PackageTags>
     <RepositoryUrl>https://github.com/rootherald/sdk-dotnet</RepositoryUrl>
     <PackageProjectUrl>https://rootherald.io</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -36,19 +35,6 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <!-- Pin the JwtBearer version to match the consuming target framework.
-       Microsoft ships these as TFM-bound packages: 8.0.x for net8.0, 9.0.x
-       for net9.0. The OpenIdConnect protocols package isn't TFM-bound. -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.0" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.2.0" />
   </ItemGroup>
 
 </Project>
