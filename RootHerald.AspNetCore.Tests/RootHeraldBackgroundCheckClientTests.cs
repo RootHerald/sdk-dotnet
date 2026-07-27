@@ -73,18 +73,43 @@ public class RootHeraldBackgroundCheckClientTests
     public async Task VerifyAsync_maps_pass_to_allow()
     {
         var (client, handler) = Make();
+        // Real wire shape: the pass/fail token lives at verdict.device.verdict,
+        // with assuranceClaimsMet + enrollmentRequired as top-level siblings.
         handler.Enqueue(HttpStatusCode.OK,
-            """{"verdict":{"verdict":"pass","ueid":"dev_1"}}""");
+            """
+            {
+              "verdict": {
+                "acr": "urn:rootherald:acr:hardware",
+                "amr": ["hwk"],
+                "device": {
+                  "ueid": "dev_1",
+                  "disclosureClass": "pseudonymous",
+                  "earStatus": "affirming",
+                  "verdict": "pass",
+                  "attestationType": "tpm20",
+                  "quoteVerified": true
+                }
+              },
+              "assuranceClaimsMet": ["urn:rootherald:assurance:hardware-backed"],
+              "enrollmentRequired": false
+            }
+            """);
 
         var result = await client.VerifyAsync(
             JsonNode.Parse("""{"evidence":"opaque"}""")!,
-            new AttestOptions { ChallengeId = "chal_1", Policy = "p" });
+            new AttestOptions { ChallengeId = "chal_1", Policy = "p", RequestedDisclosureClass = "pseudonymous" });
 
         Assert.Equal("allow", result.Verdict);
         Assert.True(result.IsAllowed);
+        Assert.Equal(new[] { "urn:rootherald:assurance:hardware-backed" }, result.AssuranceClaimsMet);
+        Assert.False(result.EnrollmentRequired);
+        // Per-device appraisal fields flow through under verdict.device verbatim.
+        Assert.Equal("affirming", result.VerdictData["device"]?["earStatus"]?.GetValue<string>());
+        Assert.Equal("tpm20", result.VerdictData["device"]?["attestationType"]?.GetValue<string>());
         Assert.Equal("/api/v1/attestations/verify", handler.LastRequestPath);
         Assert.Equal("chal_1", handler.LastBody?["challengeId"]?.GetValue<string>());
         Assert.Equal("p", handler.LastBody?["policy"]?.GetValue<string>());
+        Assert.Equal("pseudonymous", handler.LastBody?["requestedDisclosureClass"]?.GetValue<string>());
         // Evidence is passed through verbatim.
         Assert.Equal("opaque", handler.LastBody?["evidence"]?["evidence"]?.GetValue<string>());
     }
@@ -93,13 +118,38 @@ public class RootHeraldBackgroundCheckClientTests
     public async Task VerifyAsync_maps_fail_to_deny_without_throwing()
     {
         var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.OK, """{"verdict":{"verdict":"fail","ueid":"dev_1"}}""");
+        handler.Enqueue(HttpStatusCode.OK,
+            """
+            {
+              "verdict": {
+                "acr": "urn:rootherald:acr:hardware",
+                "device": { "ueid": "dev_1", "verdict": "fail", "earStatus": "contraindicated" }
+              },
+              "assuranceClaimsMet": [],
+              "enrollmentRequired": true
+            }
+            """);
 
         var result = await client.VerifyAsync(
             new JsonObject(), new AttestOptions { ChallengeId = "chal_1" });
 
         Assert.Equal("deny", result.Verdict);
         Assert.False(result.IsAllowed);
+        Assert.True(result.EnrollmentRequired);
+        Assert.Empty(result.AssuranceClaimsMet);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_omits_disclosure_class_when_not_supplied()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.OK,
+            """{"verdict":{"device":{"verdict":"pass"}},"assuranceClaimsMet":[],"enrollmentRequired":false}""");
+
+        await client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" });
+
+        var body = Assert.IsType<JsonObject>(handler.LastBody);
+        Assert.False(body.ContainsKey("requestedDisclosureClass"));
     }
 
     [Fact]
@@ -301,7 +351,8 @@ public class RootHeraldBackgroundCheckClientTests
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK,
             """{"challengeId":"chal_1","nonce":"n","expiresAt":"2026-07-01T00:00:00Z"}""");
-        handler.Enqueue(HttpStatusCode.OK, """{"verdict":{"verdict":"pass"}}""");
+        handler.Enqueue(HttpStatusCode.OK,
+            """{"verdict":{"device":{"verdict":"pass"}},"assuranceClaimsMet":[],"enrollmentRequired":false}""");
 
 #pragma warning disable CS0618 // intentionally exercising the obsolete aliases
         var challenge = await client.CreateChallengeAsync();

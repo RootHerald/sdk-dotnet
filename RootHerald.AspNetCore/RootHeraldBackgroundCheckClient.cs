@@ -28,6 +28,14 @@ public sealed record AttestOptions
     /// <c>rootherald:builtin:*</c> name. Unknown/foreign names fail closed (422).
     /// </summary>
     public string? Policy { get; init; }
+
+    /// <summary>
+    /// Optional requested disclosure class for the returned device claim —
+    /// <c>"verdict"</c>, <c>"pseudonymous"</c>, <c>"derived"</c>, or
+    /// <c>"full"</c>. Sent on the wire as <c>requestedDisclosureClass</c>;
+    /// omitted from the request when null.
+    /// </summary>
+    public string? RequestedDisclosureClass { get; init; }
 }
 
 /// <summary>
@@ -55,6 +63,20 @@ public sealed record AttestResult
     /// </summary>
     public required JsonNode VerdictData { get; init; }
 
+    /// <summary>
+    /// Assurance-claim URNs the device satisfied, from the top-level
+    /// <c>assuranceClaimsMet</c> sibling of <c>verdict</c> on the wire. Empty
+    /// when the server omits it.
+    /// </summary>
+    public IReadOnlyList<string> AssuranceClaimsMet { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The attest-first / enroll-on-miss signal, from the top-level
+    /// <c>enrollmentRequired</c> sibling of <c>verdict</c>. <c>true</c> when the
+    /// device must (re-)enroll before it can be appraised.
+    /// </summary>
+    public bool EnrollmentRequired { get; init; }
+
     /// <summary>True when the verdict is <c>"allow"</c>.</summary>
     public bool IsAllowed => string.Equals(Verdict, "allow", StringComparison.OrdinalIgnoreCase);
 }
@@ -73,7 +95,7 @@ public sealed record AttestResult
 public sealed class RootHeraldBackgroundCheckClient
 {
     /// <summary>Production Root Herald API base URL.</summary>
-    public const string DefaultBaseUrl = "https://api.rootherald.io";
+    public const string DefaultBaseUrl = "https://rootherald.io";
 
     private const string SecretKeyPrefix = "rh_sk_";
 
@@ -173,6 +195,8 @@ public sealed class RootHeraldBackgroundCheckClient
             ["evidence"] = evidence.DeepClone(),
         };
         if (options.Policy is not null) body["policy"] = options.Policy;
+        if (options.RequestedDisclosureClass is not null)
+            body["requestedDisclosureClass"] = options.RequestedDisclosureClass;
 
         var data = await PostAsync("api/v1/attestations/verify", body, cancellationToken)
             .ConfigureAwait(false);
@@ -180,11 +204,15 @@ public sealed class RootHeraldBackgroundCheckClient
         if (verdictNode is not JsonObject)
             throw new RootHeraldApiException(200, "verify response missing verdict");
 
-        var raw = verdictNode["verdict"]?.GetValue<string>();
+        // The pass/fail token and per-device appraisal fields (earStatus,
+        // attestationType, quoteVerified, …) live under verdict.device.
+        var raw = verdictNode["device"]?["verdict"]?.GetValue<string>();
         return new AttestResult
         {
             Verdict = Normalize(raw),
             VerdictData = verdictNode,
+            AssuranceClaimsMet = ReadStringArray(data["assuranceClaimsMet"]),
+            EnrollmentRequired = data["enrollmentRequired"]?.GetValue<bool>() ?? false,
         };
     }
 
@@ -385,4 +413,19 @@ public sealed class RootHeraldBackgroundCheckClient
         "fail" or "deny" or "contraindicated" => "deny",
         _ => "review",
     };
+
+    /// <summary>Reads a JSON string array, tolerating a null/absent/non-array node.</summary>
+    private static IReadOnlyList<string> ReadStringArray(JsonNode? node)
+    {
+        if (node is not JsonArray array)
+            return Array.Empty<string>();
+
+        var values = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item?.GetValue<string>() is { } value)
+                values.Add(value);
+        }
+        return values;
+    }
 }
