@@ -16,6 +16,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RootHerald.AspNetCore\RootHerald.AspNetCore.csproj" />
+    <!-- The native binding package has no test project of its own; its verdict
+         mapping is security-relevant (it used to fail OPEN), so it is covered here. -->
+    <ProjectReference Include="..\RootHerald\RootHerald.csproj" />
   </ItemGroup>
 
 </Project>

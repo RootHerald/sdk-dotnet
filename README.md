@@ -6,7 +6,7 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldBackgroundCheckClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **GA** |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldBackgroundCheckClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.1`, not yet on NuGet) |
 | [`RootHerald.Native`](./RootHerald) | FFI binding to the native client SDK (`RootHerald.dll`/`librootherald.so`/`RootHeraldKit`) — drive TPM attestation from C# desktop apps | Desktop (Win/Linux/macOS) | Preview — see below |
 
 ## Quick start: Background-Check (server → server)

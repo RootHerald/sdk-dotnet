@@ -5,6 +5,12 @@ namespace RootHerald;
 /// <summary>
 /// Verdict from <see cref="RootHeraldClient.VerifyAsync"/>.
 /// </summary>
+/// <remarks>
+/// The numeric values are the NATIVE ABI contract and must not be renumbered here
+/// alone — the native library returns a plain <c>int</c> and both sides have to
+/// agree. Fail-closed behaviour therefore lives in <see cref="FromNative"/>, not in
+/// the numbering.
+/// </remarks>
 public enum RootHeraldVerdict
 {
     /// <summary>Allow the action.</summary>
@@ -135,7 +141,7 @@ public sealed class RootHeraldClient : IDisposable
                 $"Verify failed (status={status}): {raw.Reason}");
         }
         return new RootHeraldVerifyResult(
-            Verdict: (RootHeraldVerdict)raw.Verdict,
+            Verdict: FromNative(raw.Verdict),
             DeviceId: raw.DeviceId ?? string.Empty,
             TpmClass: raw.TpmClass ?? string.Empty,
             PostureJson: raw.PostureJson ?? "{}",
@@ -147,6 +153,28 @@ public sealed class RootHeraldClient : IDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(RootHeraldClient));
     }
+
+    /// <summary>
+    /// Map the native verdict int to the enum, FAILING CLOSED on anything
+    /// unrecognised.
+    ///
+    /// This was a direct cast: <c>(RootHeraldVerdict)raw.Verdict</c>. Because
+    /// <see cref="RootHeraldVerdict.Allow"/> is 0, any value the native side did not
+    /// intend — a zeroed struct, a marshalling mismatch, a verdict added on the
+    /// native side that this build predates — silently became ALLOW. NativeMethods
+    /// warns in its own comments that ABI drift "will manifest as silent corruption
+    /// at the ABI boundary"; corruption that resolves to Allow is the worst possible
+    /// default for a security decision, and this was the only fail-open verdict
+    /// mapping across all six RootHerald SDKs.
+    /// </summary>
+    internal static RootHeraldVerdict FromNative(int value) => value switch
+    {
+        0 => RootHeraldVerdict.Allow,
+        1 => RootHeraldVerdict.Warn,
+        2 => RootHeraldVerdict.Deny,
+        _ => RootHeraldVerdict.Deny,
+    };
+
 
     private static void ThrowIfFailed(int status, string message)
     {

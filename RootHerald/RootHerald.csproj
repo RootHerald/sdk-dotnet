@@ -49,4 +49,12 @@
           Condition="Exists('..\..\..\build\windows\Release\RootHerald.dll')" />
   </ItemGroup>
 
+
+  <ItemGroup>
+    <!-- FromNative is the fail-closed verdict mapping (it used to be a direct cast
+         that silently resolved garbage to Allow). Kept internal so it is not public
+         API, but it needs a regression test. -->
+    <InternalsVisibleTo Include="RootHerald.AspNetCore.Tests" />
+  </ItemGroup>
+
 </Project>
