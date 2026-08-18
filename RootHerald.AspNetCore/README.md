@@ -88,8 +88,16 @@ else
 
 ```csharp
 var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
-var deviceId = result.VerdictData["ueid"]?.GetValue<string>();
-if (deviceId is not null && await banList.Contains(deviceId))
+
+// NOTE the ["device"] hop. `ueid` is nested under `device` in the verdict —
+// reading it from the root returns null, so the ban check silently never fires
+// and every banned device is allowed through. This sample said
+// VerdictData["ueid"] until 2026-08.
+var deviceId = result.VerdictData["device"]?["ueid"]?.GetValue<string>();
+
+// Fail closed if the identifier is missing: no id means you cannot prove the
+// device is NOT banned.
+if (deviceId is null || await banList.Contains(deviceId))
     return Results.Forbid();
 ```
 

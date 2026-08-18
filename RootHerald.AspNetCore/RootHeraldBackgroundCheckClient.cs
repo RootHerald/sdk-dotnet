@@ -101,6 +101,8 @@ public sealed class RootHeraldBackgroundCheckClient
 
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
+    private readonly Uri _baseUri;
+    private readonly string _secretKey;
 
     /// <summary>
     /// Create a Background-Check client.
@@ -123,11 +125,35 @@ public sealed class RootHeraldBackgroundCheckClient
                 "RootHerald secret key must start with rh_sk_",
                 nameof(secretKey));
 
+        var resolvedBase = (baseUrl ?? DefaultBaseUrl).TrimEnd('/') + "/";
+        if (!Uri.TryCreate(resolvedBase, UriKind.Absolute, out var baseUri)
+            || baseUri.Scheme != Uri.UriSchemeHttps)
+        {
+            // MED-19: no SDK checked this. A typo'd or http:// base URL sends the
+            // full-privilege rh_sk_ secret in cleartext. Localhost is exempt so the
+            // local docker stack still works.
+            if (baseUri is null || !baseUri.IsLoopback)
+                throw new ArgumentException(
+                    $"baseUrl must be an absolute https URL (got '{resolvedBase}').",
+                    nameof(baseUrl));
+        }
+
         _ownsHttp = httpClient is null;
         _http = httpClient ?? new HttpClient();
-        _http.BaseAddress ??= new Uri((baseUrl ?? DefaultBaseUrl).TrimEnd('/') + "/");
-        _http.DefaultRequestHeaders.Remove("Authorization");
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {secretKey}");
+        _baseUri = baseUri!;
+        _secretKey = secretKey;
+
+        // MED-20: auth is attached PER REQUEST, not onto the client.
+        //
+        // This used to set _http.DefaultRequestHeaders["Authorization"] and
+        // _http.BaseAddress on a caller-supplied HttpClient. With
+        // IHttpClientFactory or a typed/singleton client — the documented way to
+        // inject one — that client is shared, so the rh_sk_ secret was attached to
+        // EVERY request it made, including to third-party hosts. The `??=` on
+        // BaseAddress had the same shape of bug: an injected client's existing
+        // BaseAddress silently won, sending the key and the evidence somewhere else
+        // entirely. Mutating an object you do not own is the defect; scoping the
+        // header to our own requests fixes both.
     }
 
     /// <summary>
@@ -353,8 +379,16 @@ public sealed class RootHeraldBackgroundCheckClient
     /// interpretation is left to the caller (used by the enroll relay, which must
     /// inspect the <c>409 already-enrolled</c> short-circuit).
     /// </summary>
-    private Task<HttpResponseMessage> RawPostAsync(string path, object body, CancellationToken cancellationToken) =>
-        _http.PostAsJsonAsync(path, body, cancellationToken);
+    private Task<HttpResponseMessage> RawPostAsync(string path, object body, CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_baseUri, path))
+        {
+            Content = JsonContent.Create(body),
+        };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _secretKey);
+        return _http.SendAsync(request, cancellationToken);
+    }
 
     /// <summary>Reads a response body as a JSON object, tolerating an empty/odd body.</summary>
     private static async Task<JsonObject?> ReadJsonObjectAsync(

@@ -16,6 +16,9 @@ internal sealed class MockHttpMessageHandler : HttpMessageHandler
     /// <summary>The path + query of the most recent request.</summary>
     public string? LastRequestPath { get; private set; }
 
+    /// <summary>Host of the most recent request — proves which origin was actually called.</summary>
+    public string? LastRequestHost { get; private set; }
+
     /// <summary>The <c>Authorization</c> header of the most recent request.</summary>
     public string? LastAuthorization { get; private set; }
 
@@ -49,6 +52,7 @@ internal sealed class MockHttpMessageHandler : HttpMessageHandler
     {
         RequestCount++;
         LastRequestPath = request.RequestUri?.PathAndQuery;
+        LastRequestHost = request.RequestUri?.Host;
         LastAuthorization = request.Headers.Authorization?.ToString();
         if (request.Content is not null)
         {
