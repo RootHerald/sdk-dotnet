@@ -13,7 +13,7 @@ var secretKey = builder.Configuration["RootHerald:SecretKey"]
     ?? Environment.GetEnvironmentVariable("ROOTHERALD_SECRET_KEY");
 if (!string.IsNullOrEmpty(secretKey))
 {
-    builder.Services.AddSingleton(new RootHeraldBackgroundCheckClient(secretKey));
+    builder.Services.AddSingleton(new RootHeraldClient(secretKey));
 }
 
 var app = builder.Build();
@@ -23,7 +23,7 @@ app.MapGet("/", () => "RootHerald.AspNetCore sample — POST evidence JSON to /a
 // Background-Check (server -> server). The dumb client POSTs its opaque
 // evidence blob here; this server appraises it with the rh_sk_ secret key. The
 // client never holds a key or calls Root Herald directly.
-app.MapPost("/attest", async (HttpContext ctx, RootHeraldBackgroundCheckClient? rh) =>
+app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient? rh) =>
 {
     if (rh is null)
         return Results.Json(new { error = "set RootHerald:SecretKey to enable /attest" }, statusCode: 501);

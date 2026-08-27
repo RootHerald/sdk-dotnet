@@ -7,20 +7,20 @@ namespace RootHerald.AspNetCore;
 
 /// <summary>
 /// A relay-friendly nonce minted by
-/// <see cref="RootHeraldBackgroundCheckClient.CreateChallengeAsync"/>.
+/// <see cref="RootHeraldClient.IssueChallengeAsync"/>.
 /// Relay <see cref="Nonce"/> to the dumb client; it quotes over it and returns
 /// an opaque evidence blob, which the server submits to
-/// <see cref="RootHeraldBackgroundCheckClient.AttestAsync"/> using
+/// <see cref="RootHeraldClient.VerifyAsync"/> using
 /// <see cref="ChallengeId"/>.
 /// </summary>
 public sealed record RootHeraldChallenge(string ChallengeId, string Nonce, string ExpiresAt);
 
 /// <summary>
-/// Options for <see cref="RootHeraldBackgroundCheckClient.AttestAsync"/>.
+/// Options for <see cref="RootHeraldClient.VerifyAsync"/>.
 /// </summary>
 public sealed record AttestOptions
 {
-    /// <summary>The single-use challenge id from CreateChallengeAsync. Required.</summary>
+    /// <summary>The single-use challenge id from IssueChallengeAsync. Required.</summary>
     public required string ChallengeId { get; init; }
 
     /// <summary>
@@ -39,7 +39,7 @@ public sealed record AttestOptions
 }
 
 /// <summary>
-/// The result of <see cref="RootHeraldBackgroundCheckClient.AttestAsync"/>: the
+/// The result of <see cref="RootHeraldClient.VerifyAsync"/>: the
 /// normalised verdict and the full verdict node.
 /// </summary>
 public sealed record AttestResult
@@ -87,12 +87,12 @@ public sealed record AttestResult
 /// The customer's dumb client collects an opaque evidence blob (no keys, no
 /// Root Herald contact) and hands it to the customer's own server. The server
 /// uses this client, authenticated with its <c>rh_sk_</c> secret key, to mint a
-/// relay-friendly nonce (<see cref="CreateChallengeAsync"/>) and submit the
-/// evidence for appraisal (<see cref="AttestAsync"/>).
+/// relay-friendly nonce (<see cref="IssueChallengeAsync"/>) and submit the
+/// evidence for appraisal (<see cref="VerifyAsync"/>).
 /// </para>
 /// Pure managed C# over <see cref="HttpClient"/>; no native dependencies.
 /// </summary>
-public sealed class RootHeraldBackgroundCheckClient
+public sealed class RootHeraldClient
 {
     /// <summary>Production Root Herald API base URL.</summary>
     public const string DefaultBaseUrl = "https://rootherald.io";
@@ -116,7 +116,7 @@ public sealed class RootHeraldBackgroundCheckClient
     /// Optional <see cref="HttpClient"/> (DI / IHttpClientFactory / tests). When
     /// supplied, the caller owns its lifetime; otherwise an internal one is used.
     /// </param>
-    public RootHeraldBackgroundCheckClient(string secretKey, string? baseUrl = null, HttpClient? httpClient = null)
+    public RootHeraldClient(string secretKey, string? baseUrl = null, HttpClient? httpClient = null)
     {
         if (string.IsNullOrEmpty(secretKey))
             throw new ArgumentException("a secret key (rh_sk_…) is required", nameof(secretKey));
@@ -182,15 +182,6 @@ public sealed class RootHeraldBackgroundCheckClient
     }
 
     /// <summary>
-    /// Renamed to <see cref="IssueChallengeAsync"/> for the ABI 3.0 backend
-    /// contract. Retained as a thin alias for backwards compatibility.
-    /// </summary>
-    [Obsolete("Renamed to IssueChallengeAsync for the ABI 3.0 backend contract.")]
-    public Task<RootHeraldChallenge> CreateChallengeAsync(
-        string? deviceHint = null, CancellationToken cancellationToken = default) =>
-        IssueChallengeAsync(deviceHint, cancellationToken);
-
-    /// <summary>
     /// <c>POST /api/v1/attestations/verify</c> — submit the opaque evidence blob
     /// for server-side appraisal and return the verdict.
     /// <para>
@@ -241,15 +232,6 @@ public sealed class RootHeraldBackgroundCheckClient
             EnrollmentRequired = data["enrollmentRequired"]?.GetValue<bool>() ?? false,
         };
     }
-
-    /// <summary>
-    /// Renamed to <see cref="VerifyAsync"/> for the ABI 3.0 backend contract.
-    /// Retained as a thin alias for backwards compatibility.
-    /// </summary>
-    [Obsolete("Renamed to VerifyAsync for the ABI 3.0 backend contract.")]
-    public Task<AttestResult> AttestAsync(
-        JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default) =>
-        VerifyAsync(evidence, options, cancellationToken);
 
     /// <summary>
     /// Enroll relay — leg 1. <c>POST /api/v1/devices/enroll</c>.

@@ -8,11 +8,11 @@ public class RootHeraldBackgroundCheckClientTests
 {
     private const string SecretKey = "rh_sk_test_abc123";
 
-    private static (RootHeraldBackgroundCheckClient client, MockHttpMessageHandler handler) Make()
+    private static (RootHeraldClient client, MockHttpMessageHandler handler) Make()
     {
         var handler = new MockHttpMessageHandler();
         var http = new HttpClient(handler);
-        var client = new RootHeraldBackgroundCheckClient(SecretKey, "https://api.test.local", http);
+        var client = new RootHeraldClient(SecretKey, "https://api.test.local", http);
         return (client, handler);
     }
 
@@ -21,14 +21,14 @@ public class RootHeraldBackgroundCheckClientTests
     [Fact]
     public void Constructor_rejects_empty_secret_key()
     {
-        Assert.Throws<ArgumentException>(() => new RootHeraldBackgroundCheckClient(""));
+        Assert.Throws<ArgumentException>(() => new RootHeraldClient(""));
     }
 
     [Fact]
     public void Constructor_rejects_invalid_prefix_key()
     {
         var ex = Assert.Throws<ArgumentException>(
-            () => new RootHeraldBackgroundCheckClient("rh_bogus_nope"));
+            () => new RootHeraldClient("rh_bogus_nope"));
         Assert.Contains("rh_sk_", ex.Message);
     }
 
@@ -343,24 +343,4 @@ public class RootHeraldBackgroundCheckClientTests
             }));
     }
 
-    // ── Deprecated aliases still work ──────────────────────────────────────
-
-    [Fact]
-    public async Task Deprecated_aliases_forward_to_new_helpers()
-    {
-        var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.OK,
-            """{"challengeId":"chal_1","nonce":"n","expiresAt":"2026-07-01T00:00:00Z"}""");
-        handler.Enqueue(HttpStatusCode.OK,
-            """{"verdict":{"device":{"verdict":"pass"}},"assuranceClaimsMet":[],"enrollmentRequired":false}""");
-
-#pragma warning disable CS0618 // intentionally exercising the obsolete aliases
-        var challenge = await client.CreateChallengeAsync();
-        var verdict = await client.AttestAsync(new JsonObject(),
-            new AttestOptions { ChallengeId = challenge.ChallengeId });
-#pragma warning restore CS0618
-
-        Assert.Equal("chal_1", challenge.ChallengeId);
-        Assert.Equal("allow", verdict.Verdict);
-    }
 }
