@@ -10,7 +10,7 @@ namespace RootHerald.AspNetCore;
 /// The client holds NO Root Herald key and opens NO socket to Root Herald — it
 /// does local TPM work and hands these opaque blobs to your backend, which
 /// relays them with its <c>rh_sk_</c> secret via
-/// <see cref="RootHeraldBackgroundCheckClient.RelayEnrollAsync"/>. Field names
+/// <see cref="RootHeraldClient.RelayEnrollAsync"/>. Field names
 /// are the canonical wire keys the native client emits and the server binds.
 /// </para>
 /// </summary>
@@ -130,7 +130,7 @@ public sealed record RelayActivateResponse
 
 /// <summary>
 /// Resolved result of the enroll relay leg
-/// (<see cref="RootHeraldBackgroundCheckClient.RelayEnrollAsync"/>), normalising
+/// (<see cref="RootHeraldClient.RelayEnrollAsync"/>), normalising
 /// the asymmetric <c>201</c>/<c>409</c> HTTP outcomes into one shape so callers
 /// branch on <see cref="AlreadyEnrolled"/> instead of re-parsing HTTP status.
 /// <list type="bullet">
@@ -138,7 +138,7 @@ public sealed record RelayActivateResponse
 ///     <see cref="AlreadyEnrolled"/> = <c>false</c> — fresh <c>201</c> enroll:
 ///     <see cref="Challenge"/> is non-null; relay it to the client's
 ///     <c>EnrollComplete</c>, then call
-///     <see cref="RootHeraldBackgroundCheckClient.RelayActivateAsync"/>.
+///     <see cref="RootHeraldClient.RelayActivateAsync"/>.
 ///   </description></item>
 ///   <item><description>
 ///     <see cref="AlreadyEnrolled"/> = <c>true</c> — <c>409</c> short-circuit: the

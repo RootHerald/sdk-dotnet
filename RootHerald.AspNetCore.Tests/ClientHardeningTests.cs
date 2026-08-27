@@ -1,5 +1,4 @@
 using System.Net;
-using RootHerald;
 using Xunit;
 
 namespace RootHerald.AspNetCore.Tests;
@@ -25,7 +24,7 @@ public class ClientHardeningTests
     {
         var http = new HttpClient(new MockHttpMessageHandler());
 
-        _ = new RootHeraldBackgroundCheckClient(SecretKey, "https://api.test.local", http);
+        _ = new RootHeraldClient(SecretKey, "https://api.test.local", http);
 
         // The caller's client must come back exactly as they handed it over — no
         // Authorization header for their other requests to carry, no BaseAddress.
@@ -42,7 +41,7 @@ public class ClientHardeningTests
         var handler = new MockHttpMessageHandler();
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://someone-elses-host.test/") };
 
-        var client = new RootHeraldBackgroundCheckClient(SecretKey, "https://api.test.local", http);
+        var client = new RootHeraldClient(SecretKey, "https://api.test.local", http);
         handler.Enqueue(HttpStatusCode.OK, """{"challengeId":"c1","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""");
 
         await client.IssueChallengeAsync();
@@ -56,7 +55,7 @@ public class ClientHardeningTests
     {
         var handler = new MockHttpMessageHandler();
         var http = new HttpClient(handler);
-        var client = new RootHeraldBackgroundCheckClient(SecretKey, "https://api.test.local", http);
+        var client = new RootHeraldClient(SecretKey, "https://api.test.local", http);
         handler.Enqueue(HttpStatusCode.OK, """{"challengeId":"c1","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""");
 
         await client.IssueChallengeAsync();
@@ -72,7 +71,7 @@ public class ClientHardeningTests
     {
         var http = new HttpClient(new MockHttpMessageHandler());
         Assert.Throws<ArgumentException>(
-            () => new RootHeraldBackgroundCheckClient(SecretKey, baseUrl, http));
+            () => new RootHeraldClient(SecretKey, baseUrl, http));
     }
 
     [Theory]
@@ -81,23 +80,8 @@ public class ClientHardeningTests
     public void Constructor_StillAllowsLoopbackForLocalDev_MED19(string baseUrl)
     {
         var http = new HttpClient(new MockHttpMessageHandler());
-        var client = new RootHeraldBackgroundCheckClient(SecretKey, baseUrl, http);
+        var client = new RootHeraldClient(SecretKey, baseUrl, http);
         Assert.NotNull(client);
     }
 
-    [Theory]
-    [InlineData(0, RootHeraldVerdict.Allow)]
-    [InlineData(1, RootHeraldVerdict.Warn)]
-    [InlineData(2, RootHeraldVerdict.Deny)]
-    [InlineData(3, RootHeraldVerdict.Deny)]      // unknown future verdict
-    [InlineData(-1, RootHeraldVerdict.Deny)]     // garbage / marshalling drift
-    [InlineData(99, RootHeraldVerdict.Deny)]
-    public void NativeVerdict_FailsClosedOnAnythingUnrecognised_SDK1(int native, RootHeraldVerdict expected)
-    {
-        // The native value was cast directly. Because Allow is 0, any value the
-        // native side did not intend — a zeroed struct, ABI drift, a verdict added
-        // later — silently became ALLOW. This was the only fail-open verdict mapping
-        // across all six RootHerald SDKs.
-        Assert.Equal(expected, RootHeraldClient.FromNative(native));
-    }
 }

@@ -5,7 +5,7 @@ namespace RootHerald.AspNetCore.Tests;
 
 /// <summary>
 /// A scripted <see cref="HttpMessageHandler"/> for unit-testing
-/// <see cref="RootHeraldBackgroundCheckClient"/> without a real network. Returns a
+/// <see cref="RootHeraldClient"/> without a real network. Returns a
 /// queued response per request and records the last request (URI, Authorization
 /// header, JSON body) for assertions.
 /// </summary>
