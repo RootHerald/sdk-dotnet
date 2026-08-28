@@ -196,7 +196,6 @@ public class RootHeraldBackgroundCheckClientTests
             EkCertPem = "-----BEGIN CERTIFICATE-----",
         });
 
-        Assert.False(result.AlreadyEnrolled);
         Assert.Equal("dev_42", result.DeviceId);
         Assert.NotNull(result.Challenge);
         Assert.Equal("cred", result.Challenge!.CredentialBlob);
@@ -229,41 +228,6 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.False(body.ContainsKey("ekCertificateChain"));
     }
 
-    // ── RelayEnroll: 409 already-enrolled (the asymmetric path) ─────────────
-
-    [Fact]
-    public async Task RelayEnrollAsync_409_returns_already_enrolled_without_throwing()
-    {
-        var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.Conflict, """{"deviceId":"dev_existing"}""");
-
-        var result = await client.RelayEnrollAsync(new EnrollRequestBlob
-        {
-            EkPublicKey = "ekpub",
-            AkPublicArea = "akpub",
-            Platform = "windows",
-        });
-
-        Assert.True(result.AlreadyEnrolled);
-        Assert.Equal("dev_existing", result.DeviceId);
-        Assert.Null(result.Challenge);
-    }
-
-    [Fact]
-    public async Task RelayEnrollAsync_409_without_deviceId_throws()
-    {
-        var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.Conflict, """{"error":"conflict"}""");
-
-        var ex = await Assert.ThrowsAsync<RootHeraldApiException>(() =>
-            client.RelayEnrollAsync(new EnrollRequestBlob
-            {
-                EkPublicKey = "ekpub",
-                AkPublicArea = "akpub",
-                Platform = "windows",
-            }));
-        Assert.Equal(409, ex.StatusCode);
-    }
 
     [Fact]
     public async Task RelayEnrollAsync_validates_required_fields()

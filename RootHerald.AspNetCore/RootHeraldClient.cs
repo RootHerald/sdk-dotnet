@@ -237,22 +237,11 @@ public sealed class RootHeraldClient
     /// Enroll relay — leg 1. <c>POST /api/v1/devices/enroll</c>.
     /// <para>
     /// Relays the client's <c>EnrollBegin()</c> blob to Root Herald with the
-    /// <c>rh_sk_</c> secret and resolves the asymmetric response into a
-    /// <see cref="RelayEnrollResult"/>:
-    /// <list type="bullet">
-    ///   <item><description>
-    ///     <c>201</c> — a fresh enroll: returns
-    ///     <c>{ AlreadyEnrolled = false, DeviceId, Challenge }</c>. Hand
-    ///     <see cref="RelayEnrollResult.Challenge"/> to the client's
-    ///     <c>EnrollComplete</c>, then relay the result to
-    ///     <see cref="RelayActivateAsync"/>.
-    ///   </description></item>
-    ///   <item><description>
-    ///     <c>409</c> — the device is already enrolled: returns
-    ///     <c>{ AlreadyEnrolled = true, DeviceId }</c> (no challenge, no throw).
-    ///     SKIP the activate leg.
-    ///   </description></item>
-    /// </list>
+    /// <c>rh_sk_</c> secret and returns the
+    /// <see cref="RelayEnrollResult.Challenge"/> to hand to the client's
+    /// <c>EnrollComplete</c>, whose result goes to
+    /// <see cref="RelayActivateAsync"/>.
+    /// <para>
     /// The client never holds the <c>rh_sk_</c> key and never talks to Root
     /// Herald; this backend helper is the only thing that does.
     /// </para>
@@ -273,14 +262,6 @@ public sealed class RootHeraldClient
 
         // 409 = already enrolled: the body carries only deviceId. Resolve it and
         // signal "skip activate" instead of treating it as an error.
-        if (response.StatusCode == HttpStatusCode.Conflict)
-        {
-            var body = await ReadJsonObjectAsync(response, cancellationToken).ConfigureAwait(false);
-            var deviceId = body?["deviceId"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(deviceId))
-                throw new RootHeraldApiException(409, "already-enrolled (409) response missing deviceId");
-            return new RelayEnrollResult { AlreadyEnrolled = true, DeviceId = deviceId };
-        }
 
         if (!response.IsSuccessStatusCode)
             throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
@@ -297,7 +278,6 @@ public sealed class RootHeraldClient
 
         return new RelayEnrollResult
         {
-            AlreadyEnrolled = false,
             DeviceId = challenge.DeviceId,
             Challenge = challenge,
         };
@@ -309,7 +289,7 @@ public sealed class RootHeraldClient
     /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
     /// secret) to Root Herald, completing the EK→AK credential-activation
     /// handshake. Call this only when <see cref="RelayEnrollAsync"/> returned
-    /// <see cref="RelayEnrollResult.AlreadyEnrolled"/> = <c>false</c>.
+    /// challenge.
     /// </para>
     /// Returns the terminal <c>{ deviceId, status, enrolledAt }</c> body;
     /// <see cref="RelayActivateResponse.DeviceId"/> is the load-bearing field the
