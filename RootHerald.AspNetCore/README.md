@@ -71,15 +71,8 @@ helper relays them with the `rh_sk_` secret:
 
 ```csharp
 var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/devices/enroll
-if (enroll.AlreadyEnrolled)
-{
-    // device already bound; skip activate, just use enroll.DeviceId
-}
-else
-{
-    // hand enroll.Challenge to the client's EnrollComplete, then relay the result
-    var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/devices/activate
-}
+// hand enroll.Challenge to the client's EnrollComplete, then relay the result
+var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/devices/activate
 ```
 
 ## Common patterns

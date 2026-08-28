@@ -129,39 +129,27 @@ public sealed record RelayActivateResponse
 }
 
 /// <summary>
-/// Resolved result of the enroll relay leg
-/// (<see cref="RootHeraldClient.RelayEnrollAsync"/>), normalising
-/// the asymmetric <c>201</c>/<c>409</c> HTTP outcomes into one shape so callers
-/// branch on <see cref="AlreadyEnrolled"/> instead of re-parsing HTTP status.
-/// <list type="bullet">
-///   <item><description>
-///     <see cref="AlreadyEnrolled"/> = <c>false</c> — fresh <c>201</c> enroll:
-///     <see cref="Challenge"/> is non-null; relay it to the client's
-///     <c>EnrollComplete</c>, then call
-///     <see cref="RootHeraldClient.RelayActivateAsync"/>.
-///   </description></item>
-///   <item><description>
-///     <see cref="AlreadyEnrolled"/> = <c>true</c> — <c>409</c> short-circuit: the
-///     device is already bound, so SKIP the activate leg and just use
-///     <see cref="DeviceId"/>. <see cref="Challenge"/> is <c>null</c>.
-///   </description></item>
-/// </list>
-/// Either way <see cref="DeviceId"/> is resolved.
+/// Result of the enroll relay leg
+/// (<see cref="RootHeraldClient.RelayEnrollAsync"/>).
+/// <para>
+/// Enrolment always issues a challenge, including for a device already known —
+/// re-enrolment is how a device rotates its attestation key, so short-circuiting
+/// it would make rotation impossible. Relay <see cref="Challenge"/> to the
+/// client's <c>EnrollComplete</c>, then call
+/// <see cref="RootHeraldClient.RelayActivateAsync"/>.
+/// </para>
+/// <para>
+/// <see cref="DeviceId"/> is THIS tenant's alias for the device, not a global
+/// identifier: another tenant enrolling the same silicon is told a different one.
+/// </para>
 /// </summary>
 public sealed record RelayEnrollResult
 {
-    /// <summary>
-    /// <c>true</c> when the device was already enrolled (<c>409</c>); skip the
-    /// activate leg. <c>false</c> for a fresh <c>201</c> enroll.
-    /// </summary>
-    public required bool AlreadyEnrolled { get; init; }
-
-    /// <summary>The resolved device id (UUID). Present in both outcomes.</summary>
+    /// <summary>This tenant's alias for the device.</summary>
     public required string DeviceId { get; init; }
 
     /// <summary>
     /// The MakeCredential challenge to hand to the client's <c>EnrollComplete</c>.
-    /// Non-null iff <see cref="AlreadyEnrolled"/> is <c>false</c>.
     /// </summary>
-    public EnrollActivationChallenge? Challenge { get; init; }
+    public required EnrollActivationChallenge Challenge { get; init; }
 }

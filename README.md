@@ -65,19 +65,13 @@ var enroll = await rh.RelayEnrollAsync(new EnrollRequestBlob
     EkCertPem    = blob.EkCertPem,     // optional
 });
 
-if (enroll.AlreadyEnrolled)
+// Hand enroll.Challenge to the client's EnrollComplete(); then relay leg 2.
+var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
 {
-    // Device already bound — use enroll.DeviceId, no activate leg.
-}
-else
-{
-    // Hand enroll.Challenge to the client's EnrollComplete(); then relay leg 2.
-    var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
-    {
-        DeviceId        = enroll.DeviceId,
-        DecryptedSecret = clientResult.DecryptedSecret,
-    });
-    // activated.DeviceId is the stable id you map to your user.
+    DeviceId        = enroll.DeviceId,
+    DecryptedSecret = clientResult.DecryptedSecret,
+});
+// activated.DeviceId is the stable id you map to your user.
 }
 ```
 
