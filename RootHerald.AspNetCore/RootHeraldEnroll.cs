@@ -5,7 +5,7 @@ namespace RootHerald.AspNetCore;
 /// <summary>
 /// Client ABI 3.0 enroll handshake — leg 1 request body, the output of the dumb
 /// client's <c>EnrollBegin()</c> and the body of
-/// <c>POST /api/v1/devices/enroll</c>.
+/// <c>POST /api/v1/attest/enroll</c>.
 /// <para>
 /// The client holds NO Root Herald key and opens NO socket to Root Herald — it
 /// does local TPM work and hands these opaque blobs to your backend, which
@@ -57,7 +57,7 @@ public sealed record EnrollRequestBlob
 
 /// <summary>
 /// The MakeCredential challenge — the <c>201</c> response body of
-/// <c>POST /api/v1/devices/enroll</c> and the input to the client's
+/// <c>POST /api/v1/attest/enroll</c> and the input to the client's
 /// <c>EnrollComplete()</c>. <see cref="CredentialBlob"/> and
 /// <see cref="EncryptedSecret"/> are the <c>TPM2_MakeCredential</c> outputs the
 /// client feeds straight into <c>TPM2_ActivateCredential</c>.
@@ -80,7 +80,7 @@ public sealed record EnrollActivationChallenge
 /// <summary>
 /// Client ABI 3.0 enroll handshake — leg 2 request body, the output of the
 /// client's <c>EnrollComplete()</c> and the body of
-/// <c>POST /api/v1/devices/activate</c>. The client decrypts the challenge inside
+/// <c>POST /api/v1/attest/activate</c>. The client decrypts the challenge inside
 /// the TPM and returns the released secret to prove the EK→AK binding.
 /// </summary>
 public sealed record EnrollActivationResponse
@@ -107,7 +107,7 @@ public sealed record EnrollActivationResponse
 }
 
 /// <summary>
-/// Terminal response of the activate relay leg — <c>POST /api/v1/devices/activate</c>.
+/// Terminal response of the activate relay leg — <c>POST /api/v1/attest/activate</c>.
 /// Mirrors the server's <c>{ deviceId, status, enrolledAt }</c> body;
 /// <see cref="DeviceId"/> is the load-bearing field the backend maps to its user.
 /// </summary>
