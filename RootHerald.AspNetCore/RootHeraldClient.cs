@@ -157,7 +157,7 @@ public sealed class RootHeraldClient
     }
 
     /// <summary>
-    /// <c>POST /api/v1/attestations/challenge</c> — mint a relay-friendly nonce.
+    /// <c>POST /api/v1/attest/challenge</c> — mint a relay-friendly nonce.
     /// Relay <see cref="RootHeraldChallenge.Nonce"/> to the client; it quotes
     /// over it, then submit the resulting evidence with
     /// <see cref="VerifyAsync"/> using
@@ -171,7 +171,7 @@ public sealed class RootHeraldClient
         var body = new JsonObject();
         if (deviceHint is not null) body["deviceHint"] = deviceHint;
 
-        var data = await PostAsync("api/v1/attestations/challenge", body, cancellationToken)
+        var data = await PostAsync("api/v1/attest/challenge", body, cancellationToken)
             .ConfigureAwait(false);
         var id = data["challengeId"]?.GetValue<string>();
         var nonce = data["nonce"]?.GetValue<string>();
@@ -182,7 +182,7 @@ public sealed class RootHeraldClient
     }
 
     /// <summary>
-    /// <c>POST /api/v1/attestations/verify</c> — submit the opaque evidence blob
+    /// <c>POST /api/v1/attest/verify</c> — submit the opaque evidence blob
     /// for server-side appraisal and return the verdict.
     /// <para>
     /// An un-enrolled / failing device is NOT an error — it returns a normal
@@ -215,7 +215,7 @@ public sealed class RootHeraldClient
         if (options.RequestedDisclosureClass is not null)
             body["requestedDisclosureClass"] = options.RequestedDisclosureClass;
 
-        var data = await PostAsync("api/v1/attestations/verify", body, cancellationToken)
+        var data = await PostAsync("api/v1/attest/verify", body, cancellationToken)
             .ConfigureAwait(false);
         var verdictNode = data["verdict"];
         if (verdictNode is not JsonObject)
@@ -234,7 +234,7 @@ public sealed class RootHeraldClient
     }
 
     /// <summary>
-    /// Enroll relay — leg 1. <c>POST /api/v1/devices/enroll</c>.
+    /// Enroll relay — leg 1. <c>POST /api/v1/attest/enroll</c>.
     /// <para>
     /// Relays the client's <c>EnrollBegin()</c> blob to Root Herald with the
     /// <c>rh_sk_</c> secret and returns the
@@ -257,7 +257,7 @@ public sealed class RootHeraldClient
             throw new ArgumentException(
                 "enroll request blob requires ekPublicKey and akPublicArea", nameof(enrollRequestBlob));
 
-        using var response = await RawPostAsync("api/v1/devices/enroll", enrollRequestBlob, cancellationToken)
+        using var response = await RawPostAsync("api/v1/attest/enroll", enrollRequestBlob, cancellationToken)
             .ConfigureAwait(false);
 
         // 409 = already enrolled: the body carries only deviceId. Resolve it and
@@ -284,7 +284,7 @@ public sealed class RootHeraldClient
     }
 
     /// <summary>
-    /// Enroll relay — leg 2. <c>POST /api/v1/devices/activate</c>.
+    /// Enroll relay — leg 2. <c>POST /api/v1/attest/activate</c>.
     /// <para>
     /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
     /// secret) to Root Herald, completing the EK→AK credential-activation
@@ -306,7 +306,7 @@ public sealed class RootHeraldClient
             throw new ArgumentException(
                 "activation response requires deviceId and decryptedSecret", nameof(activationResponse));
 
-        var data = await PostAsync("api/v1/devices/activate", activationResponse, cancellationToken)
+        var data = await PostAsync("api/v1/attest/activate", activationResponse, cancellationToken)
             .ConfigureAwait(false);
         var deviceId = data["deviceId"]?.GetValue<string>();
         if (string.IsNullOrEmpty(deviceId))

@@ -53,7 +53,7 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.Equal("chal_1", result.ChallengeId);
         Assert.Equal("nonce_abc", result.Nonce);
         Assert.Equal("2026-07-01T00:00:00Z", result.ExpiresAt);
-        Assert.Equal("/api/v1/attestations/challenge", handler.LastRequestPath);
+        Assert.Equal("/api/v1/attest/challenge", handler.LastRequestPath);
         Assert.Equal($"Bearer {SecretKey}", handler.LastAuthorization);
         Assert.Equal("device-hint", handler.LastBody?["deviceHint"]?.GetValue<string>());
     }
@@ -106,7 +106,7 @@ public class RootHeraldBackgroundCheckClientTests
         // Per-device appraisal fields flow through under verdict.device verbatim.
         Assert.Equal("affirming", result.VerdictData["device"]?["earStatus"]?.GetValue<string>());
         Assert.Equal("tpm20", result.VerdictData["device"]?["attestationType"]?.GetValue<string>());
-        Assert.Equal("/api/v1/attestations/verify", handler.LastRequestPath);
+        Assert.Equal("/api/v1/attest/verify", handler.LastRequestPath);
         Assert.Equal("chal_1", handler.LastBody?["challengeId"]?.GetValue<string>());
         Assert.Equal("p", handler.LastBody?["policy"]?.GetValue<string>());
         Assert.Equal("pseudonymous", handler.LastBody?["requestedDisclosureClass"]?.GetValue<string>());
@@ -200,7 +200,7 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.NotNull(result.Challenge);
         Assert.Equal("cred", result.Challenge!.CredentialBlob);
         Assert.Equal("sec", result.Challenge.EncryptedSecret);
-        Assert.Equal("/api/v1/devices/enroll", handler.LastRequestPath);
+        Assert.Equal("/api/v1/attest/enroll", handler.LastRequestPath);
         Assert.Equal($"Bearer {SecretKey}", handler.LastAuthorization);
         // Wire-shape: camelCase keys.
         Assert.Equal("ekpub", handler.LastBody?["ekPublicKey"]?.GetValue<string>());
@@ -275,7 +275,7 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.Equal("dev_42", result.DeviceId);
         Assert.Equal("enrolled", result.Status);
         Assert.Equal("2026-06-30T12:00:00Z", result.EnrolledAt);
-        Assert.Equal("/api/v1/devices/activate", handler.LastRequestPath);
+        Assert.Equal("/api/v1/attest/activate", handler.LastRequestPath);
         Assert.Equal($"Bearer {SecretKey}", handler.LastAuthorization);
         Assert.Equal("dev_42", handler.LastBody?["deviceId"]?.GetValue<string>());
         Assert.Equal("secret", handler.LastBody?["decryptedSecret"]?.GetValue<string>());

@@ -70,9 +70,9 @@ The client emits opaque `EnrollBegin()` / `EnrollComplete()` blobs; this backend
 helper relays them with the `rh_sk_` secret:
 
 ```csharp
-var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/devices/enroll
+var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/attest/enroll
 // hand enroll.Challenge to the client's EnrollComplete, then relay the result
-var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/devices/activate
+var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/attest/activate
 ```
 
 ## Common patterns
