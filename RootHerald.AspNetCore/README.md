@@ -6,10 +6,10 @@ extra steps.
 
 **Background-Check (server → server).** Your dumb client collects an opaque
 evidence blob (no keys, no Root Herald contact) and hands it to *your* server.
-Your server uses `RootHeraldBackgroundCheckClient`, authenticated with your
-`rh_sk_` secret key, to mint a nonce and submit the evidence for appraisal. The
-verdict is computed by Root Herald and returned to your backend; it never
-travels through the client.
+Your server uses `RootHeraldClient`, authenticated with your `rh_sk_` secret
+key, to mint a challenge and submit the evidence for appraisal. The verdict is
+computed by Root Herald and returned to your backend; it never travels through
+the client.
 
 ## Install
 
@@ -28,16 +28,16 @@ var builder = WebApplication.CreateBuilder(args);
 // Construct once with your SECRET key (rh_sk_…). Any key without the rh_sk_
 // prefix is rejected.
 builder.Services.AddSingleton(
-    new RootHeraldBackgroundCheckClient(builder.Configuration["RootHerald:SecretKey"]!));
+    new RootHeraldClient(builder.Configuration["RootHerald:SecretKey"]!));
 
 var app = builder.Build();
 
-app.MapPost("/attest", async (HttpContext ctx, RootHeraldBackgroundCheckClient rh) =>
+app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient rh) =>
 {
     var evidence = await ctx.Request.ReadFromJsonAsync<JsonNode>() ?? new JsonObject();
 
-    // 1) Mint a relay-friendly nonce; hand challenge.Nonce to the client, which
-    //    quotes over it and returns the opaque evidence blob.
+    // 1) Mint a challenge; relay challenge.Challenge to the client verbatim. It
+    //    quotes over the nonce inside it and returns the opaque evidence blob.
     var challenge = await rh.IssueChallengeAsync();
 
     // 2) Submit the evidence and get a verdict.
@@ -55,25 +55,61 @@ app.Run();
 
 `VerifyAsync` returns an `AttestResult` whose `Verdict` is normalised to
 `"allow"` / `"deny"` / `"review"` (from the raw `pass`/`fail`/`warn`), with
-`IsAllowed` as a convenience. The full server verdict object is available
-verbatim as a `JsonNode` on `VerdictData` (including the additive, advisory-only
-cohort fields under `device`). Protocol/auth/quota problems raise a typed
-`RootHeraldApiException` (`InvalidSecretKeyException`, `UnknownPolicyException`,
-`ChallengeException`, `InvalidEvidenceException`, `QuotaExceededException`).
+`IsAllowed` as a convenience and `DeviceId` reading `verdict.device.ueid`. The
+full server verdict object is available verbatim as a `JsonNode` on
+`VerdictData` (including the additive, advisory-only cohort fields under
+`device`). Protocol/auth/quota problems raise a typed `RootHeraldApiException`
+(`InvalidSecretKeyException`, `UnknownPolicyException`,
+`PolicyDowngradeException`, `AdmissionRefusedException`, `ChallengeException`,
+`InvalidEvidenceException`, `QuotaExceededException`), each exposing the
+server's `ErrorCode`.
 
-> `IssueChallengeAsync` / `VerifyAsync` are the ABI 3.0 names; `CreateChallengeAsync`
-> / `AttestAsync` remain as deprecated aliases.
+## The challenge carries the ask
+
+`IssueChallengeAsync()` asks for identity and posture. The `ChallengeOptions`
+overload sets the ask explicitly and can pin the policy the challenge will be
+appraised under; a `VerifyAsync` that later names a weaker policy fails with
+`PolicyDowngradeException`.
+
+Asking for `Ask.Key` has the device create a TPM-resident signing key and
+certify it with its attestation key. A passing verdict then carries the public
+half as `result.Key`; store it against the user and check later requests
+locally, with no call to Root Herald:
+
+```csharp
+var challenge = await rh.IssueChallengeAsync(new ChallengeOptions
+{
+    Ask = new[] { Ask.Identity, Ask.Key },
+    KeyPurpose = "sign",
+});
+var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
+if (result.IsAllowed && result.Key is { } key)
+    await store.SaveAsync(userId, key.KeyId, key.Jwk); // P-256 or P-384 public key as a JWK
+
+// On a later request the device signed with that key. The signature is ECDSA
+// over SHA-256(message) (SHA-384 for P-384), raw r||s or DER; a malformed one
+// is false, never an exception.
+if (!RootHeraldClient.VerifyKeySignature(jwk, message, signature))
+    return Results.Forbid();
+```
 
 ## One-time device enroll (backend-relayed)
 
 The client emits opaque `EnrollBegin()` / `EnrollComplete()` blobs; this backend
-helper relays them with the `rh_sk_` secret:
+helper relays them with the `rh_sk_` secret. Enrolment always issues a
+challenge, including for a device already known — re-enrolment is how a device
+rotates its attestation key — so every enroll is followed by activate:
 
 ```csharp
 var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/attest/enroll
 // hand enroll.Challenge to the client's EnrollComplete, then relay the result
 var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/attest/activate
 ```
+
+`RelayEnrollAsync(blob, challenge.ChallengeId)` admits the device against that
+challenge's policy instead of the tenant default, so a device whose TPM class
+can never satisfy it is refused before it gets an attestation key:
+`AdmissionRefusedException`, with the class in the message.
 
 ## Common patterns
 
@@ -82,15 +118,9 @@ var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1
 ```csharp
 var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
 
-// NOTE the ["device"] hop. `ueid` is nested under `device` in the verdict —
-// reading it from the root returns null, so the ban check silently never fires
-// and every banned device is allowed through. This sample said
-// VerdictData["ueid"] until 2026-08.
-var deviceId = result.VerdictData["device"]?["ueid"]?.GetValue<string>();
-
-// Fail closed if the identifier is missing: no id means you cannot prove the
-// device is NOT banned.
-if (deviceId is null || await banList.Contains(deviceId))
+// DeviceId reads verdict.device.ueid. Fail closed if it is missing: no id
+// means you cannot prove the device is NOT banned.
+if (result.DeviceId is null || await banList.Contains(result.DeviceId))
     return Results.Forbid();
 ```
 

@@ -6,7 +6,7 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.1`, not yet on NuGet) |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.2`, not yet on NuGet) |
 
 ## Quick start: Background-Check (server → server)
 
@@ -27,11 +27,11 @@ using RootHerald.AspNetCore;
 var rh = new RootHeraldClient(
     Environment.GetEnvironmentVariable("ROOTHERALD_SECRET_KEY")!);
 
-// 1) Mint a relay-friendly nonce; send challenge.Nonce down to the client.
+// 1) Mint a challenge; relay challenge.Challenge down to the client verbatim.
 var challenge = await rh.IssueChallengeAsync();
 
-// 2) The client quotes over the nonce and returns an opaque evidence blob
-//    (JsonNode); submit it for appraisal.
+// 2) The client quotes over the nonce inside it and returns an opaque evidence
+//    blob (JsonNode); submit it for appraisal.
 var result = await rh.VerifyAsync(evidence, new AttestOptions
 {
     ChallengeId = challenge.ChallengeId,
@@ -43,17 +43,15 @@ if (result.IsAllowed) { /* proceed */ }
 
 Pure managed C#. No native dependencies. Single-file publish works with no DLL
 shipped alongside. See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md)
-for the full surface (verdict shape, enroll relay, common patterns).
-
-> `IssueChallengeAsync` / `VerifyAsync` are retained as `[Obsolete]` aliases of
-> `IssueChallengeAsync` / `VerifyAsync` for backwards compatibility.
+for the full surface: the verdict shape, the ask model and device-bound
+signing keys, the enroll relay, and common patterns.
 
 ## Quick start: Enroll relay (one-time device bootstrap)
 
 The keyless client produces opaque enroll blobs; your backend relays them to Root
-Herald with the `rh_sk_` secret. The two-leg handshake is asymmetric: a fresh
-device returns a MakeCredential challenge (`201`), an already-bound device
-short-circuits (`409`, skip the activate leg).
+Herald with the `rh_sk_` secret. Enrolment always issues a MakeCredential
+challenge (`201`), including for a device already known — re-enrolment is how a
+device rotates its attestation key — so both legs always run.
 
 ```csharp
 // Leg 1 — relay the client's EnrollBegin() blob.
@@ -72,20 +70,21 @@ var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
     DecryptedSecret = clientResult.DecryptedSecret,
 });
 // activated.DeviceId is the stable id you map to your user.
-}
 ```
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an
 exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`
-(401), `UnknownPolicyException` (422), `ChallengeException` (409),
-`InvalidEvidenceException` (400), `QuotaExceededException` (429).
+(401), `UnknownPolicyException` / `PolicyDowngradeException` /
+`AdmissionRefusedException` (422, told apart by `ErrorCode`),
+`ChallengeException` (409), `InvalidEvidenceException` (400),
+`QuotaExceededException` (429).
 
 ## Target frameworks
 
 - `net8.0` (LTS)
 - `net9.0`
 
-Both packages multi-target. Major .NET versions are added as they hit LTS.
+Major .NET versions are added as they hit LTS.
 
 ## Trust chain
 
