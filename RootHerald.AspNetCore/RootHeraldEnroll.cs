@@ -68,6 +68,14 @@ public sealed record EnrollActivationChallenge
     [JsonPropertyName("deviceId")]
     public required string DeviceId { get; init; }
 
+    /// <summary>
+    /// The attestation challenge this enrolment was admitted against, echoed
+    /// when <see cref="RootHeraldClient.RelayEnrollAsync"/> was given one.
+    /// </summary>
+    [JsonPropertyName("challengeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChallengeId { get; init; }
+
     /// <summary>base64 <c>TPM2_MakeCredential</c> credential blob (<c>id-object</c>).</summary>
     [JsonPropertyName("credentialBlob")]
     public required string CredentialBlob { get; init; }
