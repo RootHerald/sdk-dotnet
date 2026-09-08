@@ -66,7 +66,7 @@ public sealed class PolicyDowngradeException : RootHeraldApiException
 }
 
 /// <summary>
-/// Enrolment was refused because the device's TPM class can never satisfy the
+/// Enrollment was refused because the device's TPM class can never satisfy the
 /// challenge's policy (HTTP 422, error code <c>admission_refused</c>). The
 /// class is in <see cref="Exception.Message"/>.
 /// </summary>

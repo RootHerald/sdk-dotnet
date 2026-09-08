@@ -49,8 +49,8 @@ signing keys, the enroll relay, and common patterns.
 ## Quick start: Enroll relay (one-time device bootstrap)
 
 The keyless client produces opaque enroll blobs; your backend relays them to Root
-Herald with the `rh_sk_` secret. Enrolment always issues a MakeCredential
-challenge (`201`), including for a device already known — re-enrolment is how a
+Herald with the `rh_sk_` secret. Enrollment always issues a MakeCredential
+challenge (`201`), including for a device already known — re-enrollment is how a
 device rotates its attestation key — so both legs always run.
 
 ```csharp

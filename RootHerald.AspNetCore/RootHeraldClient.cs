@@ -420,9 +420,9 @@ public sealed class RootHeraldClient
     /// <para>
     /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
     /// secret) to Root Herald, completing the EK→AK credential-activation
-    /// handshake. Every <see cref="RelayEnrollAsync"/> leads here: enrolment
+    /// handshake. Every <see cref="RelayEnrollAsync"/> leads here: enrollment
     /// always issues a challenge, including for a known device, because
-    /// re-enrolment is how a device rotates its attestation key.
+    /// re-enrollment is how a device rotates its attestation key.
     /// </para>
     /// Returns the terminal <c>{ deviceId, status, enrolledAt }</c> body;
     /// <see cref="RelayActivateResponse.DeviceId"/> is the load-bearing field the
@@ -612,7 +612,7 @@ public sealed class RootHeraldClient
             HttpStatusCode.UnprocessableEntity when errorCode == CodePolicyDowngrade =>
                 new PolicyDowngradeException(message ?? "policy weaker than the challenge's", errorCode),
             HttpStatusCode.UnprocessableEntity when errorCode == CodeAdmissionRefused =>
-                new AdmissionRefusedException(message ?? "enrolment refused for this device class", errorCode),
+                new AdmissionRefusedException(message ?? "enrollment refused for this device class", errorCode),
             HttpStatusCode.UnprocessableEntity => new UnknownPolicyException(message ?? "unknown policy", errorCode),
             HttpStatusCode.Conflict => new ChallengeException(message ?? "challenge invalid or expired", errorCode),
             HttpStatusCode.BadRequest => new InvalidEvidenceException(message ?? "invalid evidence", errorCode),
