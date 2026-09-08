@@ -69,7 +69,7 @@ public sealed record EnrollActivationChallenge
     public required string DeviceId { get; init; }
 
     /// <summary>
-    /// The attestation challenge this enrolment was admitted against, echoed
+    /// The attestation challenge this enrollment was admitted against, echoed
     /// when <see cref="RootHeraldClient.RelayEnrollAsync"/> was given one.
     /// </summary>
     [JsonPropertyName("challengeId")]
@@ -140,8 +140,8 @@ public sealed record RelayActivateResponse
 /// Result of the enroll relay leg
 /// (<see cref="RootHeraldClient.RelayEnrollAsync"/>).
 /// <para>
-/// Enrolment always issues a challenge, including for a device already known —
-/// re-enrolment is how a device rotates its attestation key, so short-circuiting
+/// Enrollment always issues a challenge, including for a device already known —
+/// re-enrollment is how a device rotates its attestation key, so short-circuiting
 /// it would make rotation impossible. Relay <see cref="Challenge"/> to the
 /// client's <c>EnrollComplete</c>, then call
 /// <see cref="RootHeraldClient.RelayActivateAsync"/>.

@@ -8,7 +8,7 @@ namespace RootHerald.AspNetCore.Tests;
 
 /// <summary>
 /// The challenge carries the ask: the ask goes out on the challenge, a passing
-/// verdict with a key ask brings the certified key back, enrolment can be
+/// verdict with a key ask brings the certified key back, enrollment can be
 /// admitted against a challenge, and the two new 422 codes are told apart.
 /// </summary>
 public class AskModelTests
