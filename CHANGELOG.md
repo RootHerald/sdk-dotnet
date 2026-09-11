@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-preview.3
+
+Breaking. Policies bind to API keys, not to calls.
+
+- The `Policy` property is gone from `ChallengeOptions` and `AttestOptions`.
+  The server resolves the policy from the key that mints the challenge and
+  pins it there; a `policy` field in a hand-built body is refused with
+  `400 policy_bound_to_key`. Bind a policy to the key from the dashboard or
+  `PUT /api/v1/admin/api-keys/{id}/policies`.
+- `PolicyDowngradeException` is removed with the property that produced it.
+  `UnknownPolicyException` (422 `unknown_policy`) now means a policy bound to
+  the key no longer exists; nothing is substituted.
+- `RelayEnrollAsync(blob, challengeId)` keeps its shape. Admission runs under
+  the identity policy bound to the key, pinned on the challenge when one is
+  given.
+
 ## 0.1.0-preview.2
 
 Additive. Existing calls keep their shape and behaviour.

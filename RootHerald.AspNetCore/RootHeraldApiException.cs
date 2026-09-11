@@ -6,8 +6,7 @@ namespace RootHerald.AspNetCore;
 /// statuses, mirroring the <c>@rootherald/node</c> taxonomy:
 /// <list type="bullet">
 ///   <item><description>401 → <see cref="InvalidSecretKeyException"/></description></item>
-///   <item><description>422 → <see cref="UnknownPolicyException"/></description></item>
-///   <item><description>422 <c>policy_downgrade</c> → <see cref="PolicyDowngradeException"/></description></item>
+///   <item><description>422 <c>unknown_policy</c> → <see cref="UnknownPolicyException"/></description></item>
 ///   <item><description>422 <c>admission_refused</c> → <see cref="AdmissionRefusedException"/></description></item>
 ///   <item><description>409 → <see cref="ChallengeException"/></description></item>
 ///   <item><description>400 → <see cref="InvalidEvidenceException"/></description></item>
@@ -25,7 +24,7 @@ public class RootHeraldApiException : Exception
 
     /// <summary>
     /// The server-provided error code, when present — the <c>error</c> field of
-    /// the response body, e.g. <c>policy_downgrade</c> or <c>admission_refused</c>.
+    /// the response body, e.g. <c>unknown_policy</c> or <c>admission_refused</c>.
     /// </summary>
     public string? ErrorCode { get; }
 
@@ -46,7 +45,11 @@ public sealed class InvalidSecretKeyException : RootHeraldApiException
         : base(401, message, errorCode) { }
 }
 
-/// <summary>The named policy is unknown or not owned by this tenant (HTTP 422).</summary>
+/// <summary>
+/// A policy bound to the API key no longer exists; nothing is substituted
+/// (HTTP 422, error code <c>unknown_policy</c>). Rebind the key from the
+/// dashboard or <c>PUT /api/v1/admin/api-keys/{id}/policies</c>.
+/// </summary>
 public sealed class UnknownPolicyException : RootHeraldApiException
 {
     /// <summary>Create the exception.</summary>
@@ -55,20 +58,9 @@ public sealed class UnknownPolicyException : RootHeraldApiException
 }
 
 /// <summary>
-/// The verify call named a policy weaker than the one the challenge was issued
-/// with (HTTP 422, error code <c>policy_downgrade</c>).
-/// </summary>
-public sealed class PolicyDowngradeException : RootHeraldApiException
-{
-    /// <summary>Create the exception.</summary>
-    public PolicyDowngradeException(string message, string? errorCode = null)
-        : base(422, message, errorCode) { }
-}
-
-/// <summary>
 /// Enrollment was refused because the device's TPM class can never satisfy the
-/// challenge's policy (HTTP 422, error code <c>admission_refused</c>). The
-/// class is in <see cref="Exception.Message"/>.
+/// identity policy bound to the API key (HTTP 422, error code
+/// <c>admission_refused</c>). The class is in <see cref="Exception.Message"/>.
 /// </summary>
 public sealed class AdmissionRefusedException : RootHeraldApiException
 {

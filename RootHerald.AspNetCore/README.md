@@ -60,16 +60,22 @@ full server verdict object is available verbatim as a `JsonNode` on
 `VerdictData` (including the additive, advisory-only cohort fields under
 `device`). Protocol/auth/quota problems raise a typed `RootHeraldApiException`
 (`InvalidSecretKeyException`, `UnknownPolicyException`,
-`PolicyDowngradeException`, `AdmissionRefusedException`, `ChallengeException`,
-`InvalidEvidenceException`, `QuotaExceededException`), each exposing the
-server's `ErrorCode`.
+`AdmissionRefusedException`, `ChallengeException`, `InvalidEvidenceException`,
+`QuotaExceededException`), each exposing the server's `ErrorCode`.
 
 ## The challenge carries the ask
 
 `IssueChallengeAsync()` asks for identity and posture. The `ChallengeOptions`
-overload sets the ask explicitly and can pin the policy the challenge will be
-appraised under; a `VerifyAsync` that later names a weaker policy fails with
-`PolicyDowngradeException`.
+overload sets the ask explicitly.
+
+Policies bind to your API key, not to calls. The key carries an identity
+policy and, on Pro, a posture policy; a posture ask runs under the posture
+policy and everything else under the identity policy. The resolved policy is
+pinned on the challenge when it is minted. Change what a key enforces from the
+dashboard or `PUT /api/v1/admin/api-keys/{id}/policies`; a `policy` field in a
+hand-built request body is refused with `400 policy_bound_to_key`.
+`UnknownPolicyException` (422 `unknown_policy`) means a policy bound to the key
+no longer exists; nothing is substituted.
 
 Asking for `Ask.Key` has the device create a TPM-resident signing key and
 certify it with its attestation key. A passing verdict then carries the public
@@ -106,9 +112,9 @@ var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/attes
 var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/attest/activate
 ```
 
-`RelayEnrollAsync(blob, challenge.ChallengeId)` admits the device against that
-challenge's policy instead of the tenant default, so a device whose TPM class
-can never satisfy it is refused before it gets an attestation key:
+Admission runs under the key's identity policy, pinned on the challenge when
+`RelayEnrollAsync(blob, challenge.ChallengeId)` is given one, so a device whose
+TPM class can never satisfy it is refused before it gets an attestation key:
 `AdmissionRefusedException`, with the class in the message.
 
 ## Common patterns

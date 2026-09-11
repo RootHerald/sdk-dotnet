@@ -37,7 +37,6 @@ public class AskModelTests
         var result = await client.IssueChallengeAsync(new ChallengeOptions
         {
             Ask = new[] { Ask.Identity, Ask.Key },
-            Policy = "rootherald:builtin:strict-hardware",
             KeyPurpose = "sign",
             DeviceHint = "laptop-7",
         });
@@ -49,8 +48,9 @@ public class AskModelTests
         var body = Assert.IsType<JsonObject>(handler.LastBody);
         var ask = Assert.IsType<JsonArray>(body["ask"]);
         Assert.Equal(new[] { "identity", "key" }, ask.Select(a => a!.GetValue<string>()));
-        Assert.Equal("rootherald:builtin:strict-hardware", body["policy"]?.GetValue<string>());
         Assert.Equal("sign", body["keyPurpose"]?.GetValue<string>());
+        // Policies bind to the API key; the server refuses the field with 400.
+        Assert.False(body.ContainsKey("policy"), "policy was sent; policies bind to the API key");
         Assert.Equal("laptop-7", body["deviceHint"]?.GetValue<string>());
     }
 
@@ -162,7 +162,6 @@ public class AskModelTests
     // ── 422 by error code ──────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("policy_downgrade", typeof(PolicyDowngradeException))]
     [InlineData("admission_refused", typeof(AdmissionRefusedException))]
     [InlineData("unknown_policy", typeof(UnknownPolicyException))]
     [InlineData(null, typeof(UnknownPolicyException))]
