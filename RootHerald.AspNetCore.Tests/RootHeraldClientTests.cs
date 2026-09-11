@@ -97,7 +97,7 @@ public class RootHeraldBackgroundCheckClientTests
 
         var result = await client.VerifyAsync(
             JsonNode.Parse("""{"evidence":"opaque"}""")!,
-            new AttestOptions { ChallengeId = "chal_1", Policy = "p", RequestedDisclosureClass = "pseudonymous" });
+            new AttestOptions { ChallengeId = "chal_1", RequestedDisclosureClass = "pseudonymous" });
 
         Assert.Equal("allow", result.Verdict);
         Assert.True(result.IsAllowed);
@@ -108,8 +108,9 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.Equal("tpm20", result.VerdictData["device"]?["attestationType"]?.GetValue<string>());
         Assert.Equal("/api/v1/attest/verify", handler.LastRequestPath);
         Assert.Equal("chal_1", handler.LastBody?["challengeId"]?.GetValue<string>());
-        Assert.Equal("p", handler.LastBody?["policy"]?.GetValue<string>());
         Assert.Equal("pseudonymous", handler.LastBody?["requestedDisclosureClass"]?.GetValue<string>());
+        // Policies bind to the API key; the server refuses the field with 400.
+        Assert.False(handler.LastBody!.AsObject().ContainsKey("policy"), "policy was sent; policies bind to the API key");
         // Evidence is passed through verbatim.
         Assert.Equal("opaque", handler.LastBody?["evidence"]?["evidence"]?.GetValue<string>());
     }

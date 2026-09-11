@@ -6,7 +6,7 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.2`, not yet on NuGet) |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.3`, not yet on NuGet) |
 
 ## Quick start: Background-Check (server → server)
 
@@ -35,11 +35,15 @@ var challenge = await rh.IssueChallengeAsync();
 var result = await rh.VerifyAsync(evidence, new AttestOptions
 {
     ChallengeId = challenge.ChallengeId,
-    Policy      = "rootherald:builtin:strict-hardware", // optional
 });
 
 if (result.IsAllowed) { /* proceed */ }
 ```
+
+Policies bind to your API key, not to calls. The key carries an identity
+policy and, on Pro, a posture policy; the resolved policy is pinned on the
+challenge when it is minted. Change what a key enforces from the dashboard or
+`PUT /api/v1/admin/api-keys/{id}/policies`.
 
 Pure managed C#. No native dependencies. Single-file publish works with no DLL
 shipped alongside. See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md)
@@ -74,8 +78,8 @@ var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an
 exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`
-(401), `UnknownPolicyException` / `PolicyDowngradeException` /
-`AdmissionRefusedException` (422, told apart by `ErrorCode`),
+(401), `UnknownPolicyException` / `AdmissionRefusedException` (422, told apart
+by `ErrorCode`),
 `ChallengeException` (409), `InvalidEvidenceException` (400),
 `QuotaExceededException` (429).
 

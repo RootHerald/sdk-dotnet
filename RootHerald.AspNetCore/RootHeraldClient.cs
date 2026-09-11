@@ -53,13 +53,6 @@ public sealed record ChallengeOptions
     public IReadOnlyList<string>? Ask { get; init; }
 
     /// <summary>
-    /// Pins the policy this challenge will be appraised under. A later
-    /// <see cref="RootHeraldClient.VerifyAsync"/> may name the same policy or
-    /// none; naming a weaker one fails with <see cref="PolicyDowngradeException"/>.
-    /// </summary>
-    public string? Policy { get; init; }
-
-    /// <summary>
     /// What a certified key will be used for. Read only when <see cref="Ask"/>
     /// contains <see cref="AspNetCore.Ask.Key"/>; <c>"sign"</c> is the only purpose today.
     /// </summary>
@@ -76,14 +69,6 @@ public sealed record AttestOptions
 {
     /// <summary>The single-use challenge id from IssueChallengeAsync. Required.</summary>
     public required string ChallengeId { get; init; }
-
-    /// <summary>
-    /// Caller-named policy: a tenant-owned policy id/name or a
-    /// <c>rootherald:builtin:*</c> name. Unknown/foreign names fail closed (422).
-    /// When the challenge pinned a policy, naming a weaker one here is refused
-    /// with <see cref="PolicyDowngradeException"/>.
-    /// </summary>
-    public string? Policy { get; init; }
 
     /// <summary>
     /// Optional requested disclosure class for the returned device claim —
@@ -193,8 +178,7 @@ public sealed class RootHeraldClient
 
     private const string SecretKeyPrefix = "rh_sk_";
 
-    // Server error codes that refine a 422 beyond "unknown policy".
-    private const string CodePolicyDowngrade = "policy_downgrade";
+    // Server error code that refines a 422 beyond "unknown policy".
     private const string CodeAdmissionRefused = "admission_refused";
 
     private readonly HttpClient _http;
@@ -273,8 +257,14 @@ public sealed class RootHeraldClient
     /// client verbatim; it parses the ask from it and produces matching
     /// evidence, which the server submits with <see cref="VerifyAsync"/> using
     /// <see cref="RootHeraldChallenge.ChallengeId"/>.
+    /// <para>
+    /// Policies bind to the API key, not to this call. The server resolves the
+    /// policy from the key that mints the challenge and pins it on the
+    /// challenge; a <c>policy</c> field in a hand-built body is refused with
+    /// 400 <c>policy_bound_to_key</c>.
+    /// </para>
     /// </summary>
-    /// <param name="options">The ask, pinned policy, key purpose and device hint. Null asks for identity + posture.</param>
+    /// <param name="options">The ask, key purpose and device hint. Null asks for identity + posture.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<RootHeraldChallenge> IssueChallengeAsync(
         ChallengeOptions? options, CancellationToken cancellationToken = default)
@@ -283,7 +273,6 @@ public sealed class RootHeraldClient
         if (options?.DeviceHint is { } hint) body["deviceHint"] = hint;
         if (options?.Ask is { Count: > 0 } ask)
             body["ask"] = new JsonArray(ask.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray());
-        if (options?.Policy is { } policy) body["policy"] = policy;
         if (options?.KeyPurpose is { } purpose) body["keyPurpose"] = purpose;
 
         var data = await PostAsync("api/v1/attest/challenge", body, cancellationToken)
@@ -310,7 +299,7 @@ public sealed class RootHeraldClient
     /// Opaque blob from the client collector, as a <see cref="JsonNode"/>; passed
     /// through verbatim.
     /// </param>
-    /// <param name="options">Attest options carrying the challenge id and optional policy.</param>
+    /// <param name="options">Attest options carrying the challenge id and optional disclosure class.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<AttestResult> VerifyAsync(
         JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default)
@@ -326,7 +315,6 @@ public sealed class RootHeraldClient
             // evidence is opaque; embed verbatim (DeepClone detaches it from any parent).
             ["evidence"] = evidence.DeepClone(),
         };
-        if (options.Policy is not null) body["policy"] = options.Policy;
         if (options.RequestedDisclosureClass is not null)
             body["requestedDisclosureClass"] = options.RequestedDisclosureClass;
 
@@ -365,10 +353,10 @@ public sealed class RootHeraldClient
     /// <see cref="RelayActivateAsync"/>.
     /// </para>
     /// <para>
-    /// With <paramref name="challengeId"/> the request goes to
-    /// <c>?challengeId=</c> and admission runs against the policy stored on
-    /// that challenge instead of the tenant default, so a device whose TPM
-    /// class can never satisfy it is refused before it gets an attestation key:
+    /// Admission runs under the identity policy bound to the API key, pinned
+    /// on the challenge when <paramref name="challengeId"/> is given (the
+    /// request then goes to <c>?challengeId=</c>), so a device whose TPM class
+    /// can never satisfy it is refused before it gets an attestation key:
     /// <see cref="AdmissionRefusedException"/>, with the class in the message.
     /// </para>
     /// <para>
@@ -377,7 +365,7 @@ public sealed class RootHeraldClient
     /// </para>
     /// </summary>
     /// <param name="enrollRequestBlob">The opaque enroll-begin blob from the client.</param>
-    /// <param name="challengeId">A live challenge id from IssueChallengeAsync, or null for the tenant default policy.</param>
+    /// <param name="challengeId">A live challenge id from IssueChallengeAsync, or null.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<RelayEnrollResult> RelayEnrollAsync(
         EnrollRequestBlob enrollRequestBlob, string? challengeId = null, CancellationToken cancellationToken = default)
@@ -608,9 +596,7 @@ public sealed class RootHeraldClient
         {
             HttpStatusCode.Unauthorized => new InvalidSecretKeyException(message ?? "invalid secret key", errorCode),
             // A 422 is told apart by the server's error code; one without a
-            // recognised code is the policy being unknown.
-            HttpStatusCode.UnprocessableEntity when errorCode == CodePolicyDowngrade =>
-                new PolicyDowngradeException(message ?? "policy weaker than the challenge's", errorCode),
+            // recognised code is a policy bound to the key no longer existing.
             HttpStatusCode.UnprocessableEntity when errorCode == CodeAdmissionRefused =>
                 new AdmissionRefusedException(message ?? "enrollment refused for this device class", errorCode),
             HttpStatusCode.UnprocessableEntity => new UnknownPolicyException(message ?? "unknown policy", errorCode),
