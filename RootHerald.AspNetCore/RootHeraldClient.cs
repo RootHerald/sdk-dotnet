@@ -12,16 +12,18 @@ namespace RootHerald.AspNetCore;
 /// Relay <see cref="Challenge"/> to the dumb client verbatim; it parses the
 /// nonce and the ask from it, quotes over the nonce, and returns an opaque
 /// evidence blob, which the server submits to
-/// <see cref="RootHeraldClient.VerifyAsync"/> using <see cref="ChallengeId"/>.
+/// <see cref="RootHeraldClient.VerifyAsync"/> using <see cref="Nonce"/>.
 /// </summary>
-/// <param name="ChallengeId">Opaque single-use id; pass it back to VerifyAsync.</param>
-/// <param name="Nonce">The base64 nonce the client quotes over, also carried inside <paramref name="Challenge"/>.</param>
-/// <param name="ExpiresAt">ISO 8601 timestamp after which the challenge is no longer valid.</param>
+/// <param name="Nonce">
+/// The backend's handle for this challenge: 32 random bytes, base64url without
+/// padding. The same bytes as the second segment of <paramref name="Challenge"/>;
+/// the server finds the challenge by it. Pass it to VerifyAsync.
+/// </param>
 /// <param name="Challenge">
 /// The string to relay to the client: <c>rhc1.&lt;base64url nonce&gt;.&lt;base64url ask-json&gt;</c>.
-/// Null when the server predates the ask model; relay <paramref name="Nonce"/> then.
 /// </param>
-public sealed record RootHeraldChallenge(string ChallengeId, string Nonce, string ExpiresAt, string? Challenge = null);
+/// <param name="ExpiresAt">ISO 8601 timestamp after which the challenge is no longer valid.</param>
+public sealed record RootHeraldChallenge(string Nonce, string Challenge, string ExpiresAt);
 
 /// <summary>What a challenge asks the device to produce.</summary>
 public static class Ask
@@ -67,8 +69,11 @@ public sealed record ChallengeOptions
 /// </summary>
 public sealed record AttestOptions
 {
-    /// <summary>The single-use challenge id from IssueChallengeAsync. Required.</summary>
-    public required string ChallengeId { get; init; }
+    /// <summary>
+    /// The challenge handle from <see cref="RootHeraldChallenge.Nonce"/>. Required.
+    /// The server finds the challenge by it and checks the proof was made over it.
+    /// </summary>
+    public required string Nonce { get; init; }
 
     /// <summary>
     /// Optional requested disclosure class for the returned device claim —
@@ -243,7 +248,7 @@ public sealed class RootHeraldClient
     /// identity and posture. Relay <see cref="RootHeraldChallenge.Challenge"/>
     /// to the client; it quotes over the nonce inside it, then submit the
     /// resulting evidence with <see cref="VerifyAsync"/> using
-    /// <see cref="RootHeraldChallenge.ChallengeId"/>.
+    /// <see cref="RootHeraldChallenge.Nonce"/>.
     /// </summary>
     /// <param name="deviceHint">Optional advisory hint identifying the device.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
@@ -256,7 +261,7 @@ public sealed class RootHeraldClient
     /// given ask. Relay <see cref="RootHeraldChallenge.Challenge"/> to the
     /// client verbatim; it parses the ask from it and produces matching
     /// evidence, which the server submits with <see cref="VerifyAsync"/> using
-    /// <see cref="RootHeraldChallenge.ChallengeId"/>.
+    /// <see cref="RootHeraldChallenge.Nonce"/>.
     /// <para>
     /// Policies bind to the API key, not to this call. The server resolves the
     /// policy from the key that mints the challenge and pins it on the
@@ -277,12 +282,12 @@ public sealed class RootHeraldClient
 
         var data = await PostAsync("api/v1/attest/challenge", body, cancellationToken)
             .ConfigureAwait(false);
-        var id = data["challengeId"]?.GetValue<string>();
         var nonce = data["nonce"]?.GetValue<string>();
+        var challenge = data["challenge"]?.GetValue<string>();
         var expiresAt = data["expiresAt"]?.GetValue<string>();
-        if (id is null || nonce is null || expiresAt is null)
-            throw new RootHeraldApiException(200, "challenge response missing challengeId/nonce/expiresAt");
-        return new RootHeraldChallenge(id, nonce, expiresAt, data["challenge"]?.GetValue<string>());
+        if (string.IsNullOrEmpty(nonce) || string.IsNullOrEmpty(challenge) || string.IsNullOrEmpty(expiresAt))
+            throw new RootHeraldApiException(200, "challenge response missing nonce/challenge/expiresAt");
+        return new RootHeraldChallenge(nonce, challenge, expiresAt);
     }
 
     /// <summary>
@@ -299,19 +304,19 @@ public sealed class RootHeraldClient
     /// Opaque blob from the client collector, as a <see cref="JsonNode"/>; passed
     /// through verbatim.
     /// </param>
-    /// <param name="options">Attest options carrying the challenge id and optional disclosure class.</param>
+    /// <param name="options">Attest options carrying the challenge nonce and optional disclosure class.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<AttestResult> VerifyAsync(
         JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(options);
-        if (string.IsNullOrEmpty(options.ChallengeId))
-            throw new ArgumentException("AttestOptions.ChallengeId is required (from IssueChallengeAsync)", nameof(options));
+        if (string.IsNullOrEmpty(options.Nonce))
+            throw new ArgumentException("AttestOptions.Nonce is required (from IssueChallengeAsync)", nameof(options));
 
         var body = new JsonObject
         {
-            ["challengeId"] = options.ChallengeId,
+            ["nonce"] = options.Nonce,
             // evidence is opaque; embed verbatim (DeepClone detaches it from any parent).
             ["evidence"] = evidence.DeepClone(),
         };
@@ -353,11 +358,10 @@ public sealed class RootHeraldClient
     /// <see cref="RelayActivateAsync"/>.
     /// </para>
     /// <para>
-    /// Admission runs under the identity policy bound to the API key, pinned
-    /// on the challenge when <paramref name="challengeId"/> is given (the
-    /// request then goes to <c>?challengeId=</c>), so a device whose TPM class
-    /// can never satisfy it is refused before it gets an attestation key:
-    /// <see cref="AdmissionRefusedException"/>, with the class in the message.
+    /// Admission runs under the identity policy bound to the API key, so a
+    /// device whose TPM class can never satisfy it is refused before it gets an
+    /// attestation key: <see cref="AdmissionRefusedException"/>, with the class
+    /// in the message.
     /// </para>
     /// <para>
     /// The client never holds the <c>rh_sk_</c> key and never talks to Root
@@ -365,41 +369,56 @@ public sealed class RootHeraldClient
     /// </para>
     /// </summary>
     /// <param name="enrollRequestBlob">The opaque enroll-begin blob from the client.</param>
-    /// <param name="challengeId">A live challenge id from IssueChallengeAsync, or null.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<RelayEnrollResult> RelayEnrollAsync(
-        EnrollRequestBlob enrollRequestBlob, string? challengeId = null, CancellationToken cancellationToken = default)
+        EnrollRequestBlob enrollRequestBlob, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(enrollRequestBlob);
-        if (string.IsNullOrEmpty(enrollRequestBlob.EkPublicKey) ||
-            string.IsNullOrEmpty(enrollRequestBlob.AkPublicArea))
+        var ios = string.Equals(enrollRequestBlob.Platform, "ios", StringComparison.Ordinal);
+        if (ios)
+        {
+            if (string.IsNullOrEmpty(enrollRequestBlob.IosKeyId) ||
+                string.IsNullOrEmpty(enrollRequestBlob.IosAttestationObject) ||
+                string.IsNullOrEmpty(enrollRequestBlob.Nonce))
+                throw new ArgumentException(
+                    "an ios enroll request blob requires iosKeyId, iosAttestationObject and nonce",
+                    nameof(enrollRequestBlob));
+        }
+        else if (string.IsNullOrEmpty(enrollRequestBlob.EkPublicKey) ||
+                 string.IsNullOrEmpty(enrollRequestBlob.AkPublicArea))
+        {
             throw new ArgumentException(
                 "enroll request blob requires ekPublicKey and akPublicArea", nameof(enrollRequestBlob));
+        }
 
-        var path = "api/v1/attest/enroll";
-        if (!string.IsNullOrEmpty(challengeId))
-            path += "?challengeId=" + Uri.EscapeDataString(challengeId);
-
-        using var response = await RawPostAsync(path, enrollRequestBlob, cancellationToken)
+        var data = await PostAsync("api/v1/attest/enroll", enrollRequestBlob, cancellationToken)
             .ConfigureAwait(false);
+        if (data is not JsonObject body)
+            throw new RootHeraldApiException(201, "enroll response is not an object");
 
-        if (!response.IsSuccessStatusCode)
-            throw await ToApiExceptionAsync(response, cancellationToken).ConfigureAwait(false);
+        // The attestation object is the whole proof on iOS; the server answers
+        // {} because the device has nothing to activate.
+        if (ios && body.Count == 0)
+            return new RelayEnrollResult { Challenge = null };
 
-        var challenge = await response.Content
-            .ReadFromJsonAsync<EnrollActivationChallenge>(cancellationToken).ConfigureAwait(false);
-        if (challenge is null ||
-            string.IsNullOrEmpty(challenge.DeviceId) ||
-            string.IsNullOrEmpty(challenge.CredentialBlob) ||
-            string.IsNullOrEmpty(challenge.EncryptedSecret))
+        var enrollmentId = body["enrollmentId"]?.GetValue<string>();
+        var credentialBlob = body["credentialBlob"]?.GetValue<string>();
+        var encryptedSecret = body["encryptedSecret"]?.GetValue<string>();
+        var challengeNonce = body["challengeNonce"]?.GetValue<string>();
+        var tpm = !string.IsNullOrEmpty(credentialBlob) && !string.IsNullOrEmpty(encryptedSecret);
+        if (string.IsNullOrEmpty(enrollmentId) || !(tpm || !string.IsNullOrEmpty(challengeNonce)))
             throw new RootHeraldApiException(
-                (int)response.StatusCode,
-                "enroll response missing deviceId/credentialBlob/encryptedSecret");
+                201, "enroll response missing enrollmentId and credentialBlob/encryptedSecret or challengeNonce");
 
         return new RelayEnrollResult
         {
-            DeviceId = challenge.DeviceId,
-            Challenge = challenge,
+            Challenge = new EnrollActivationChallenge
+            {
+                EnrollmentId = enrollmentId,
+                CredentialBlob = credentialBlob,
+                EncryptedSecret = encryptedSecret,
+                ChallengeNonce = challengeNonce,
+            },
         };
     }
 
@@ -407,14 +426,15 @@ public sealed class RootHeraldClient
     /// Enroll relay — leg 2. <c>POST /api/v1/attest/activate</c>.
     /// <para>
     /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
-    /// secret) to Root Herald, completing the EK→AK credential-activation
-    /// handshake. Every <see cref="RelayEnrollAsync"/> leads here: enrollment
-    /// always issues a challenge, including for a known device, because
-    /// re-enrollment is how a device rotates its attestation key.
+    /// secret, or the enclave signature on macOS) to Root Herald, completing
+    /// the enrollment the <c>enrollmentId</c> names. Every TPM and macOS
+    /// <see cref="RelayEnrollAsync"/> leads here: enrollment always issues a
+    /// challenge, including for a known device, because re-enrollment is how a
+    /// device rotates its attestation key.
     /// </para>
     /// Returns the terminal <c>{ deviceId, status, enrolledAt }</c> body;
     /// <see cref="RelayActivateResponse.DeviceId"/> is the load-bearing field the
-    /// backend maps to its user.
+    /// backend maps to its user, and must never be relayed to the device.
     /// </summary>
     /// <param name="activationResponse">The opaque enroll-complete blob from the client.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
@@ -422,10 +442,11 @@ public sealed class RootHeraldClient
         EnrollActivationResponse activationResponse, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(activationResponse);
-        if (string.IsNullOrEmpty(activationResponse.DeviceId) ||
-            string.IsNullOrEmpty(activationResponse.DecryptedSecret))
+        if (string.IsNullOrEmpty(activationResponse.EnrollmentId) ||
+            (string.IsNullOrEmpty(activationResponse.DecryptedSecret) &&
+             string.IsNullOrEmpty(activationResponse.Signature)))
             throw new ArgumentException(
-                "activation response requires deviceId and decryptedSecret", nameof(activationResponse));
+                "activation response requires enrollmentId and decryptedSecret or signature", nameof(activationResponse));
 
         var data = await PostAsync("api/v1/attest/activate", activationResponse, cancellationToken)
             .ConfigureAwait(false);

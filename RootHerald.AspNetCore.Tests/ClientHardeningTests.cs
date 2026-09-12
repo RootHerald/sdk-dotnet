@@ -42,7 +42,7 @@ public class ClientHardeningTests
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://someone-elses-host.test/") };
 
         var client = new RootHeraldClient(SecretKey, "https://api.test.local", http);
-        handler.Enqueue(HttpStatusCode.OK, """{"challengeId":"c1","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""");
+        handler.Enqueue(HttpStatusCode.OK, """{"nonce":"bm9uY2U","challenge":"rhc1.bm9uY2U.e30","expiresAt":"2030-01-01T00:00:00Z"}""");
 
         await client.IssueChallengeAsync();
 
@@ -56,7 +56,7 @@ public class ClientHardeningTests
         var handler = new MockHttpMessageHandler();
         var http = new HttpClient(handler);
         var client = new RootHeraldClient(SecretKey, "https://api.test.local", http);
-        handler.Enqueue(HttpStatusCode.OK, """{"challengeId":"c1","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""");
+        handler.Enqueue(HttpStatusCode.OK, """{"nonce":"bm9uY2U","challenge":"rhc1.bm9uY2U.e30","expiresAt":"2030-01-01T00:00:00Z"}""");
 
         await client.IssueChallengeAsync();
 

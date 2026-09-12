@@ -6,7 +6,7 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.3`, not yet on NuGet) |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.4`, not yet on NuGet) |
 
 ## Quick start: Background-Check (server → server)
 
@@ -27,14 +27,15 @@ using RootHerald.AspNetCore;
 var rh = new RootHeraldClient(
     Environment.GetEnvironmentVariable("ROOTHERALD_SECRET_KEY")!);
 
-// 1) Mint a challenge; relay challenge.Challenge down to the client verbatim.
+// 1) Mint a challenge; relay challenge.Challenge down to the client verbatim
+//    and keep challenge.Nonce, the handle you verify with.
 var challenge = await rh.IssueChallengeAsync();
 
 // 2) The client quotes over the nonce inside it and returns an opaque evidence
 //    blob (JsonNode); submit it for appraisal.
 var result = await rh.VerifyAsync(evidence, new AttestOptions
 {
-    ChallengeId = challenge.ChallengeId,
+    Nonce = challenge.Nonce,
 });
 
 if (result.IsAllowed) { /* proceed */ }
@@ -67,14 +68,20 @@ var enroll = await rh.RelayEnrollAsync(new EnrollRequestBlob
     EkCertPem    = blob.EkCertPem,     // optional
 });
 
-// Hand enroll.Challenge to the client's EnrollComplete(); then relay leg 2.
+// Hand enroll.Challenge to the client's EnrollComplete() verbatim; then relay
+// its output, leg 2.
 var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
 {
-    DeviceId        = enroll.DeviceId,
-    DecryptedSecret = clientResult.DecryptedSecret,
+    EnrollmentId    = clientResult.EnrollmentId,
+    DecryptedSecret = clientResult.DecryptedSecret, // Signature on macOS
 });
-// activated.DeviceId is the stable id you map to your user.
+// activated.DeviceId is the stable id you map to your user. It is yours, not
+// the device's: never relay it back.
 ```
+
+An iOS blob (`Platform = "ios"`, with `IosKeyId`, `IosAttestationObject` and
+`Nonce`) is one leg: the server answers `{}`, `enroll.Challenge` is null, and
+there is nothing to activate.
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an
 exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`

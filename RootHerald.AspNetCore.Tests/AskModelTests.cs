@@ -8,8 +8,8 @@ namespace RootHerald.AspNetCore.Tests;
 
 /// <summary>
 /// The challenge carries the ask: the ask goes out on the challenge, a passing
-/// verdict with a key ask brings the certified key back, enrollment can be
-/// admitted against a challenge, and the two new 422 codes are told apart.
+/// verdict with a key ask brings the certified key back, and the 422 codes
+/// are told apart.
 /// </summary>
 public class AskModelTests
 {
@@ -24,7 +24,7 @@ public class AskModelTests
     }
 
     private const string ChallengeBody =
-        """{"challengeId":"chal_1","challenge":"rhc1.bm9uY2U.eyJhc2siOlsiaWRlbnRpdHkiLCJrZXkiXX0","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""";
+        """{"nonce":"bm9uY2U","challenge":"rhc1.bm9uY2U.eyJhc2siOlsiaWRlbnRpdHkiLCJrZXkiXX0","expiresAt":"2030-01-01T00:00:00Z"}""";
 
     // ── IssueChallenge ─────────────────────────────────────────────────────
 
@@ -41,9 +41,9 @@ public class AskModelTests
             DeviceHint = "laptop-7",
         });
 
-        Assert.Equal("chal_1", result.ChallengeId);
         Assert.Equal("rhc1.bm9uY2U.eyJhc2siOlsiaWRlbnRpdHkiLCJrZXkiXX0", result.Challenge);
-        Assert.Equal("bm9uY2U=", result.Nonce);
+        Assert.Equal("bm9uY2U", result.Nonce);
+        Assert.Equal("2030-01-01T00:00:00Z", result.ExpiresAt);
         Assert.Equal("/api/v1/attest/challenge", handler.LastRequestPath);
         var body = Assert.IsType<JsonObject>(handler.LastBody);
         var ask = Assert.IsType<JsonArray>(body["ask"]);
@@ -72,16 +72,13 @@ public class AskModelTests
     }
 
     [Fact]
-    public async Task IssueChallengeAsync_tolerates_a_server_without_challenge()
+    public async Task IssueChallengeAsync_requires_the_relay_string()
     {
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK,
-            """{"challengeId":"chal_1","nonce":"bm9uY2U=","expiresAt":"2030-01-01T00:00:00Z"}""");
+            """{"nonce":"bm9uY2U","expiresAt":"2030-01-01T00:00:00Z"}""");
 
-        var result = await client.IssueChallengeAsync();
-
-        Assert.Null(result.Challenge);
-        Assert.Equal("bm9uY2U=", result.Nonce);
+        await Assert.ThrowsAsync<RootHeraldApiException>(() => client.IssueChallengeAsync());
     }
 
     // ── Verify: certified key ──────────────────────────────────────────────
@@ -108,7 +105,7 @@ public class AskModelTests
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK, PassWithKey);
 
-        var result = await client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" });
+        var result = await client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" });
 
         Assert.True(result.IsAllowed);
         Assert.Equal("dev_1", result.DeviceId);
@@ -139,11 +136,11 @@ public class AskModelTests
             }
             """);
 
-        var absent = await client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" });
+        var absent = await client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" });
         Assert.Null(absent.Key);
         Assert.Null(absent.DeviceId);
 
-        var failed = await client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" });
+        var failed = await client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" });
         Assert.Equal("deny", failed.Verdict);
         Assert.Null(failed.Key);
     }
@@ -156,7 +153,7 @@ public class AskModelTests
             """{"verdict":{"device":{"verdict":"pass"}},"key":{"keyId":"key_1","purpose":"sign"}}""");
 
         await Assert.ThrowsAsync<RootHeraldApiException>(() =>
-            client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" }));
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" }));
     }
 
     // ── 422 by error code ──────────────────────────────────────────────────
@@ -174,14 +171,14 @@ public class AskModelTests
         handler.Enqueue(HttpStatusCode.UnprocessableEntity, body);
 
         var ex = await Assert.ThrowsAsync(expected, () =>
-            client.VerifyAsync(new JsonObject(), new AttestOptions { ChallengeId = "chal_1" }));
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" }));
         var api = Assert.IsAssignableFrom<RootHeraldApiException>(ex);
         Assert.Equal(422, api.StatusCode);
         Assert.Equal(code, api.ErrorCode);
         Assert.StartsWith("detail", api.Message);
     }
 
-    // ── RelayEnroll with a challenge ───────────────────────────────────────
+    // ── RelayEnroll admission ──────────────────────────────────────────────
 
     private static EnrollRequestBlob Blob() => new()
     {
@@ -191,34 +188,13 @@ public class AskModelTests
     };
 
     [Fact]
-    public async Task RelayEnrollAsync_scopes_admission_to_the_challenge_via_the_query_string()
-    {
-        var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.Created,
-            """{"deviceId":"dev_42","challengeId":"ch 1/&x","credentialBlob":"cred","encryptedSecret":"sec"}""");
-        handler.Enqueue(HttpStatusCode.Created,
-            """{"deviceId":"dev_42","credentialBlob":"cred","encryptedSecret":"sec"}""");
-
-        var scoped = await client.RelayEnrollAsync(Blob(), "ch 1/&x");
-        Assert.Equal("/api/v1/attest/enroll?challengeId=ch%201%2F%26x", handler.LastRequestPath);
-        Assert.Equal("ch 1/&x", scoped.Challenge.ChallengeId);
-        // The query string is not smuggled into the body.
-        var body = Assert.IsType<JsonObject>(handler.LastBody);
-        Assert.False(body.ContainsKey("challengeId"));
-
-        var plain = await client.RelayEnrollAsync(Blob());
-        Assert.Equal("/api/v1/attest/enroll", handler.LastRequestPath);
-        Assert.Null(plain.Challenge.ChallengeId);
-    }
-
-    [Fact]
     public async Task RelayEnrollAsync_surfaces_admission_refused_with_the_class()
     {
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.UnprocessableEntity,
             """{"error":"admission_refused","message":"policy requires a discrete TPM; device class is firmware-tpm"}""");
 
-        var ex = await Assert.ThrowsAsync<AdmissionRefusedException>(() => client.RelayEnrollAsync(Blob(), "chal_1"));
+        var ex = await Assert.ThrowsAsync<AdmissionRefusedException>(() => client.RelayEnrollAsync(Blob()));
 
         Assert.Equal("admission_refused", ex.ErrorCode);
         Assert.Contains("firmware-tpm", ex.Message);
