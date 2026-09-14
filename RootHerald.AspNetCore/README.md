@@ -40,9 +40,9 @@ app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient rh) =>
     //    quotes over the nonce inside it and returns the opaque evidence blob.
     var challenge = await rh.IssueChallengeAsync();
 
-    // 2) Submit the evidence and get a verdict.
+    // 2) Submit the evidence with the nonce and get a verdict.
     var result = await rh.VerifyAsync(evidence,
-        new AttestOptions { ChallengeId = challenge.ChallengeId });
+        new AttestOptions { Nonce = challenge.Nonce });
 
     return result.IsAllowed
         ? Results.Json(new { ok = true, verdict = result.Verdict })
@@ -66,7 +66,10 @@ full server verdict object is available verbatim as a `JsonNode` on
 ## The challenge carries the ask
 
 `IssueChallengeAsync()` asks for identity and posture. The `ChallengeOptions`
-overload sets the ask explicitly.
+overload sets the ask explicitly. The result carries `Challenge`, the `rhc1.`
+string the device answers, and `Nonce`, the backend's handle for it: the
+server finds the challenge by the nonce the proof was made over, so `Nonce` is
+what `VerifyAsync` takes.
 
 Policies bind to your API key, not to calls. The key carries an identity
 policy and, on Pro, a posture policy; a posture ask runs under the posture
@@ -88,7 +91,7 @@ var challenge = await rh.IssueChallengeAsync(new ChallengeOptions
     Ask = new[] { Ask.Identity, Ask.Key },
     KeyPurpose = "sign",
 });
-var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
+var result = await rh.VerifyAsync(evidence, new AttestOptions { Nonce = challenge.Nonce });
 if (result.IsAllowed && result.Key is { } key)
     await store.SaveAsync(userId, key.KeyId, key.Jwk); // P-256 or P-384 public key as a JWK
 
@@ -108,13 +111,21 @@ rotates its attestation key — so every enroll is followed by activate:
 
 ```csharp
 var enroll = await rh.RelayEnrollAsync(enrollRequestBlob); // POST /api/v1/attest/enroll
-// hand enroll.Challenge to the client's EnrollComplete, then relay the result
+// hand enroll.Challenge to the client's EnrollComplete verbatim, then relay its output
 var activated = await rh.RelayActivateAsync(activationResponse); // POST /api/v1/attest/activate
+// activated.DeviceId is your alias for the device; it never goes back to the device.
 ```
 
-Admission runs under the key's identity policy, pinned on the challenge when
-`RelayEnrollAsync(blob, challenge.ChallengeId)` is given one, so a device whose
-TPM class can never satisfy it is refused before it gets an attestation key:
+`EnrollRequestBlob.Platform` discriminates: `"windows"` / `"linux"` / `"macos"`
+carry `EkPublicKey` and `AkPublicArea`; `"ios"` carries `IosKeyId`,
+`IosAttestationObject` and `Nonce`, the server answers `{}`, `enroll.Challenge`
+is null and there is no activate leg. The activation challenge names the open
+enrollment by `EnrollmentId`; the device's `EnrollComplete` output echoes it
+with `DecryptedSecret` (TPM) or `Signature` (macOS). No identifier the server
+assigns reaches the device.
+
+Admission runs under the key's identity policy, so a device whose TPM class can
+never satisfy it is refused before it gets an attestation key:
 `AdmissionRefusedException`, with the class in the message.
 
 ## Common patterns
@@ -122,7 +133,7 @@ TPM class can never satisfy it is refused before it gets an attestation key:
 ### Ban a device
 
 ```csharp
-var result = await rh.VerifyAsync(evidence, new AttestOptions { ChallengeId = challenge.ChallengeId });
+var result = await rh.VerifyAsync(evidence, new AttestOptions { Nonce = challenge.Nonce });
 
 // DeviceId reads verdict.device.ueid. Fail closed if it is missing: no id
 // means you cannot prove the device is NOT banned.

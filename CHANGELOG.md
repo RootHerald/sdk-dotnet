@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.0-preview.4
+
+Breaking. Nothing the backend sends locates a row by an id the server
+assigned; the server resolves the challenge from the nonce the proof was made
+over, the enrollment from the `enrollmentId` it minted, and the device from
+the proof itself.
+
+- `RootHeraldChallenge` is `(Nonce, Challenge, ExpiresAt)`; `ChallengeId` is
+  gone and `Challenge` is always present. `Nonce` is the handle:
+  `AttestOptions.Nonce` replaces `AttestOptions.ChallengeId` and goes on the
+  wire as `nonce`.
+- `RelayEnrollAsync(blob)` takes no challenge id and sends no query string.
+  `RelayEnrollResult` is `{ Challenge }`; `DeviceId` is gone. The 201 is
+  validated as `enrollmentId` plus `credentialBlob` + `encryptedSecret` (TPM)
+  or `challengeNonce` (macOS); an iOS blob gets `{}` and a null `Challenge`.
+- `EnrollRequestBlob` is discriminated by `Platform`: `EkPublicKey` and
+  `AkPublicArea` are optional on the type and required for `windows`, `linux`
+  and `macos`; `IosKeyId`, `IosAttestationObject` and `Nonce` are required for
+  `ios`. `TpmSelfReport` (`Manufacturer`, `VendorString`) is carried when set.
+- `EnrollActivationChallenge` is `{ EnrollmentId, CredentialBlob?,
+  EncryptedSecret?, ChallengeNonce? }`; `DeviceId` and `ChallengeId` are gone.
+  `EnrollActivationResponse` is `{ EnrollmentId, DecryptedSecret?, Signature? }`;
+  `DeviceId` and `AkPublicKey` are gone. `RelayActivateAsync` requires
+  `EnrollmentId` and one of `DecryptedSecret` / `Signature`.
+- `RelayActivateResponse.DeviceId` is unchanged and is where the backend
+  learns its alias for the device; it must never be relayed to the device.
+
 ## 0.1.0-preview.3
 
 Breaking. Policies bind to API keys, not to calls.
