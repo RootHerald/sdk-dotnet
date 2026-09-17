@@ -28,12 +28,16 @@ internal sealed class MockHttpMessageHandler : HttpMessageHandler
     /// <summary>Number of requests dispatched through this handler.</summary>
     public int RequestCount { get; private set; }
 
-    public MockHttpMessageHandler Enqueue(HttpStatusCode status, string json)
+    public MockHttpMessageHandler Enqueue(HttpStatusCode status, string json,
+        params (string Name, string Value)[] headers)
     {
-        _responses.Enqueue(new HttpResponseMessage(status)
+        var response = new HttpResponseMessage(status)
         {
             Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
-        });
+        };
+        foreach (var (name, value) in headers)
+            response.Headers.TryAddWithoutValidation(name, value);
+        _responses.Enqueue(response);
         return this;
     }
 

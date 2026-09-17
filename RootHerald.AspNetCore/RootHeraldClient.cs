@@ -98,7 +98,7 @@ public sealed record AttestOptions
 /// <param name="KeyId">Root Herald's id for this key, stable for the key's lifetime.</param>
 /// <param name="Jwk">The public key as a JWK: <c>{ kty: "EC", crv: "P-256" | "P-384", x, y }</c>.</param>
 /// <param name="Purpose">What the key is certified for; echoes the challenge's <c>keyPurpose</c>.</param>
-/// <param name="AuthPolicy">base64 <c>authPolicy</c> digest from the key's public area, when it has one.</param>
+/// <param name="AuthPolicy">Hex <c>authPolicy</c> digest from the key's public area, when it has one.</param>
 /// <param name="CertifiedAt">When the certification was appraised.</param>
 public sealed record CertifiedKey(
     string KeyId,
@@ -113,7 +113,12 @@ public sealed record CertifiedKey(
 /// </summary>
 public sealed record AttestResult
 {
-    /// <summary>Normalised verdict: <c>"allow"</c>, <c>"deny"</c>, or <c>"review"</c>.</summary>
+    /// <summary>
+    /// The server's verdict token from <c>verdict.device.verdict</c>:
+    /// <see cref="RootHerald.AspNetCore.Verdict.Pass"/>, <see cref="RootHerald.AspNetCore.Verdict.Warn"/>
+    /// or <see cref="RootHerald.AspNetCore.Verdict.Fail"/>, the same vocabulary in every
+    /// RootHerald SDK. A response carrying any other token is refused.
+    /// </summary>
     public required string Verdict { get; init; }
 
     /// <summary>
@@ -148,14 +153,14 @@ public sealed record AttestResult
 
     /// <summary>
     /// The signing key the appraisal certified, from the top-level <c>key</c>
-    /// sibling of <c>verdict</c>. Present only when the challenge asked for
-    /// <see cref="Ask.Key"/> and the verdict passed; null otherwise, whatever the
-    /// evidence carried.
+    /// sibling of <c>verdict</c>, passed through as the server sent it. The
+    /// server sends one only when the challenge asked for <see cref="Ask.Key"/>
+    /// and the verdict passed; null otherwise.
     /// </summary>
     public CertifiedKey? Key { get; init; }
 
-    /// <summary>True when the verdict is <c>"allow"</c>.</summary>
-    public bool IsAllowed => string.Equals(Verdict, "allow", StringComparison.OrdinalIgnoreCase);
+    /// <summary>True when the verdict is <see cref="RootHerald.AspNetCore.Verdict.Pass"/>.</summary>
+    public bool IsPass => Verdict == RootHerald.AspNetCore.Verdict.Pass;
 
     /// <summary>
     /// The device identifier, <c>verdict.device.ueid</c>. Null when the
@@ -163,6 +168,21 @@ public sealed record AttestResult
     /// on it.
     /// </summary>
     public string? DeviceId => VerdictData["device"]?["ueid"]?.GetValue<string>();
+}
+
+/// <summary>The verdict values the server emits at <c>verdict.device.verdict</c>.</summary>
+public static class Verdict
+{
+    /// <summary>The device satisfied the policy.</summary>
+    public const string Pass = "pass";
+
+    /// <summary>The device passed with reduced assurance; the policy says whether to proceed.</summary>
+    public const string Warn = "warn";
+
+    /// <summary>The device did not satisfy the policy, or is not enrolled (see <see cref="AttestResult.EnrollmentRequired"/>).</summary>
+    public const string Fail = "fail";
+
+    internal static readonly string[] All = [Pass, Warn, Fail];
 }
 
 /// <summary>
@@ -183,8 +203,21 @@ public sealed class RootHeraldClient
 
     private const string SecretKeyPrefix = "rh_sk_";
 
-    // Server error code that refines a 422 beyond "unknown policy".
+    /// <summary>
+    /// Per-request timeout of the <see cref="HttpClient"/> this client creates
+    /// when none is supplied: 30 seconds, the same in every RootHerald server
+    /// SDK. A caller-supplied client keeps its own <see cref="HttpClient.Timeout"/>.
+    /// </summary>
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
+    // Server error codes that tell apart the refusals sharing one status.
+    private const string CodeActivationRefused = "activation_refused";
     private const string CodeAdmissionRefused = "admission_refused";
+    private const string CodeUnknownPolicy = "unknown_policy";
+    private const string CodeQuotaExceeded = "quota_exceeded";
+
+    // Marks a 429 as the metered quota, whatever the body says.
+    private const string QuotaHeader = "X-RootHerald-Quota";
 
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
@@ -201,7 +234,8 @@ public sealed class RootHeraldClient
     /// <param name="baseUrl">API base URL. Defaults to the production API.</param>
     /// <param name="httpClient">
     /// Optional <see cref="HttpClient"/> (DI / IHttpClientFactory / tests). When
-    /// supplied, the caller owns its lifetime; otherwise an internal one is used.
+    /// supplied, the caller owns its lifetime and its <see cref="HttpClient.Timeout"/>;
+    /// otherwise an internal one with <see cref="DefaultTimeout"/> is used.
     /// </param>
     public RootHeraldClient(string secretKey, string? baseUrl = null, HttpClient? httpClient = null)
     {
@@ -226,7 +260,7 @@ public sealed class RootHeraldClient
         }
 
         _ownsHttp = httpClient is null;
-        _http = httpClient ?? new HttpClient();
+        _http = httpClient ?? new HttpClient { Timeout = DefaultTimeout };
         _baseUri = baseUri!;
         _secretKey = secretKey;
 
@@ -295,7 +329,7 @@ public sealed class RootHeraldClient
     /// for server-side appraisal and return the verdict.
     /// <para>
     /// An un-enrolled / failing device is NOT an error — it returns a normal
-    /// <see cref="AttestResult"/> carrying a <c>"deny"</c>/<c>"review"</c>
+    /// <see cref="AttestResult"/> carrying a <c>"fail"</c>/<c>"warn"</c>
     /// verdict. Only protocol/auth/quota problems raise a
     /// <see cref="RootHeraldApiException"/>.
     /// </para>
@@ -331,12 +365,7 @@ public sealed class RootHeraldClient
 
         // The pass/fail token and per-device appraisal fields (earStatus,
         // attestationType, quoteVerified, …) live under verdict.device.
-        var raw = verdictNode["device"]?["verdict"]?.GetValue<string>();
-        var verdict = Normalize(raw);
-
-        // The contract certifies nothing on a failing verdict; do not let a stray
-        // key on the wire outlive the verdict it came with.
-        var key = verdict == "allow" ? ReadCertifiedKey(data["key"]) : null;
+        var verdict = ParseVerdict(verdictNode["device"]?["verdict"]);
 
         return new AttestResult
         {
@@ -344,7 +373,7 @@ public sealed class RootHeraldClient
             VerdictData = verdictNode,
             AssuranceClaimsMet = ReadStringArray(data["assuranceClaimsMet"]),
             EnrollmentRequired = data["enrollmentRequired"]?.GetValue<bool>() ?? false,
-            Key = key,
+            Key = ReadCertifiedKey(data["key"]),
         };
     }
 
@@ -598,6 +627,7 @@ public sealed class RootHeraldClient
     {
         string? errorCode = null;
         string? message = null;
+        int? retryAfterSeconds = null;
         try
         {
             var node = await response.Content.ReadFromJsonAsync<JsonNode>(cancellationToken).ConfigureAwait(false);
@@ -605,40 +635,49 @@ public sealed class RootHeraldClient
             {
                 errorCode = obj["error"]?.GetValue<string>();
                 message = obj["message"]?.GetValue<string>() ?? obj["error_description"]?.GetValue<string>();
+                if (obj["retryAfterSeconds"] is JsonValue retry && retry.TryGetValue<int>(out var seconds))
+                    retryAfterSeconds = seconds;
             }
         }
         catch (JsonException)
         {
             // non-JSON body — fall through to status-based mapping
         }
+        if (response.Headers.RetryAfter?.Delta is { } delta)
+            retryAfterSeconds = (int)delta.TotalSeconds;
 
         var status = (int)response.StatusCode;
         return response.StatusCode switch
         {
+            HttpStatusCode.Unauthorized when errorCode == CodeActivationRefused =>
+                new ActivationRefusedException(message ?? "activation refused", errorCode),
             HttpStatusCode.Unauthorized => new InvalidSecretKeyException(message ?? "invalid secret key", errorCode),
-            // A 422 is told apart by the server's error code; one without a
-            // recognised code is a policy bound to the key no longer existing.
             HttpStatusCode.UnprocessableEntity when errorCode == CodeAdmissionRefused =>
                 new AdmissionRefusedException(message ?? "enrollment refused for this device class", errorCode),
-            HttpStatusCode.UnprocessableEntity => new UnknownPolicyException(message ?? "unknown policy", errorCode),
+            HttpStatusCode.UnprocessableEntity when errorCode is null or CodeUnknownPolicy =>
+                new UnknownPolicyException(message ?? "unknown policy", errorCode),
             HttpStatusCode.Conflict => new ChallengeException(message ?? "challenge invalid or expired", errorCode),
             HttpStatusCode.BadRequest => new InvalidEvidenceException(message ?? "invalid evidence", errorCode),
-            HttpStatusCode.TooManyRequests => new QuotaExceededException(message ?? "quota exceeded", errorCode),
+            HttpStatusCode.TooManyRequests when errorCode == CodeQuotaExceeded || response.Headers.Contains(QuotaHeader) =>
+                new QuotaExceededException(message ?? "quota exceeded", errorCode),
+            HttpStatusCode.TooManyRequests =>
+                new RateLimitedException(message ?? "rate limited", errorCode, retryAfterSeconds),
             _ => new RootHeraldApiException(status, message ?? $"Root Herald API error (HTTP {status})", errorCode),
         };
     }
 
     /// <summary>
-    /// Map the flat verdict the server emits ("pass"/"fail"/"warn") to the
-    /// normalised SDK vocabulary. Unknown/missing values map to <c>"review"</c>
-    /// (fail-closed: never silently <c>"allow"</c>).
+    /// Read the <c>verdict.device.verdict</c> token. Anything outside the three
+    /// values the server emits is a malformed response, never a guessed verdict.
     /// </summary>
-    private static string Normalize(string? raw) => raw?.Trim().ToLowerInvariant() switch
+    private static string ParseVerdict(JsonNode? node)
     {
-        "pass" or "allow" or "affirming" => "allow",
-        "fail" or "deny" or "contraindicated" => "deny",
-        _ => "review",
-    };
+        var raw = node is JsonValue value && value.TryGetValue<string>(out var s) ? s.Trim().ToLowerInvariant() : null;
+        if (raw is not null && Array.IndexOf(RootHerald.AspNetCore.Verdict.All, raw) >= 0)
+            return raw;
+        throw new RootHeraldApiException(200,
+            $"verify response verdict.device.verdict is not pass/warn/fail (got {node?.ToJsonString() ?? "null"})");
+    }
 
     /// <summary>Reads a JSON string array, tolerating a null/absent/non-array node.</summary>
     private static IReadOnlyList<string> ReadStringArray(JsonNode? node)

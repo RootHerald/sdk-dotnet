@@ -50,7 +50,7 @@ app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient? rh) =>
     });
     // 2) appraise the opaque evidence the client posted.
     var result = await rh.VerifyAsync(evidence, new AttestOptions { Nonce = challenge.Nonce });
-    if (!result.IsAllowed || result.Key is null)
+    if (!result.IsPass || result.Key is null)
         // An un-enrolled / failing device is a verdict, not an error. A passing
         // verdict with a key ask always carries the key.
         return Results.Json(new { ok = false, verdict = result.Verdict }, statusCode: 403);

@@ -44,7 +44,7 @@ app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient rh) =>
     var result = await rh.VerifyAsync(evidence,
         new AttestOptions { Nonce = challenge.Nonce });
 
-    return result.IsAllowed
+    return result.IsPass
         ? Results.Json(new { ok = true, verdict = result.Verdict })
         // An un-enrolled / failing device is a verdict, NOT an error.
         : Results.Json(new { ok = false, verdict = result.Verdict }, statusCode: 403);
@@ -53,15 +53,46 @@ app.MapPost("/attest", async (HttpContext ctx, RootHeraldClient rh) =>
 app.Run();
 ```
 
-`VerifyAsync` returns an `AttestResult` whose `Verdict` is normalised to
-`"allow"` / `"deny"` / `"review"` (from the raw `pass`/`fail`/`warn`), with
-`IsAllowed` as a convenience and `DeviceId` reading `verdict.device.ueid`. The
-full server verdict object is available verbatim as a `JsonNode` on
-`VerdictData` (including the additive, advisory-only cohort fields under
-`device`). Protocol/auth/quota problems raise a typed `RootHeraldApiException`
-(`InvalidSecretKeyException`, `UnknownPolicyException`,
-`AdmissionRefusedException`, `ChallengeException`, `InvalidEvidenceException`,
-`QuotaExceededException`), each exposing the server's `ErrorCode`.
+`VerifyAsync` returns an `AttestResult` whose `Verdict` is the server's own
+token, `Verdict.Pass` / `Verdict.Warn` / `Verdict.Fail` (`"pass"` / `"warn"` /
+`"fail"`, the same vocabulary in every RootHerald SDK), with `IsPass` as a
+convenience and `DeviceId` reading `verdict.device.ueid`. A response carrying
+any other token is refused with `RootHeraldApiException`, never a guessed
+verdict. The full server verdict object is available verbatim as a `JsonNode`
+on `VerdictData` (including the additive, advisory-only cohort fields under
+`device`). Protocol/auth/quota problems raise a typed `RootHeraldApiException`;
+see [Errors](#errors).
+
+## Errors
+
+An un-enrolled or failing device is a verdict, not an exception. Only protocol,
+auth and quota problems throw, each exposing the HTTP `StatusCode` and the
+server's `ErrorCode`:
+
+| Status | Server `error` code                                 | Exception                    |
+| ------ | --------------------------------------------------- | ---------------------------- |
+| 401    | `activation_refused`                                | `ActivationRefusedException` |
+| 401    | anything else                                       | `InvalidSecretKeyException`  |
+| 400    |                                                     | `InvalidEvidenceException`   |
+| 409    |                                                     | `ChallengeException`         |
+| 422    | `unknown_policy`, or none                           | `UnknownPolicyException`     |
+| 422    | `admission_refused`                                 | `AdmissionRefusedException`  |
+| 429    | `quota_exceeded`, or an `X-RootHerald-Quota` header | `QuotaExceededException`     |
+| 429    | anything else                                       | `RateLimitedException`       |
+
+`ActivationRefusedException` is `RelayActivateAsync` being refused for an
+unknown, spent or foreign `EnrollmentId` or a wrong proof; the secret key was
+accepted. `RateLimitedException.RetryAfterSeconds` is the server's
+`Retry-After` (else the body's `retryAfterSeconds`, else null);
+`QuotaExceededException` is the metered billing ceiling. Any other status, and
+a 422 or 402 carrying a code no subclass covers (`posture_not_bound`,
+`plan_lapsed`), is a plain `RootHeraldApiException` with `ErrorCode` preserved.
+Input the SDK refuses locally, such as an empty `Nonce`, is
+`ArgumentException` and makes no request.
+
+Every request times out after 30 s (`RootHeraldClient.DefaultTimeout`) unless
+you supply your own `HttpClient`, whose `Timeout` is then used as is. The
+default is the same in every RootHerald server SDK.
 
 ## The challenge carries the ask
 
@@ -92,7 +123,7 @@ var challenge = await rh.IssueChallengeAsync(new ChallengeOptions
     KeyPurpose = "sign",
 });
 var result = await rh.VerifyAsync(evidence, new AttestOptions { Nonce = challenge.Nonce });
-if (result.IsAllowed && result.Key is { } key)
+if (result.IsPass && result.Key is { } key)
     await store.SaveAsync(userId, key.KeyId, key.Jwk); // P-256 or P-384 public key as a JWK
 
 // On a later request the device signed with that key. The signature is ECDSA

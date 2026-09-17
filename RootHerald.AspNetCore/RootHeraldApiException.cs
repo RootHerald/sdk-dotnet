@@ -5,15 +5,19 @@ namespace RootHerald.AspNetCore;
 /// Background-Check (server → server) call. Subclasses map specific HTTP
 /// statuses, mirroring the <c>@rootherald/node</c> taxonomy:
 /// <list type="bullet">
-///   <item><description>401 → <see cref="InvalidSecretKeyException"/></description></item>
-///   <item><description>422 <c>unknown_policy</c> → <see cref="UnknownPolicyException"/></description></item>
+///   <item><description>401 <c>activation_refused</c> → <see cref="ActivationRefusedException"/></description></item>
+///   <item><description>401, any other code → <see cref="InvalidSecretKeyException"/></description></item>
+///   <item><description>422 <c>unknown_policy</c> (or no code) → <see cref="UnknownPolicyException"/></description></item>
 ///   <item><description>422 <c>admission_refused</c> → <see cref="AdmissionRefusedException"/></description></item>
 ///   <item><description>409 → <see cref="ChallengeException"/></description></item>
 ///   <item><description>400 → <see cref="InvalidEvidenceException"/></description></item>
-///   <item><description>429 → <see cref="QuotaExceededException"/></description></item>
+///   <item><description>429 <c>quota_exceeded</c>, or an <c>X-RootHerald-Quota</c> header → <see cref="QuotaExceededException"/></description></item>
+///   <item><description>429, any other → <see cref="RateLimitedException"/></description></item>
 /// </list>
-/// A 422 is told apart by the server's error code (<see cref="ErrorCode"/>);
-/// one without a recognised code is <see cref="UnknownPolicyException"/>.
+/// Where one status carries two refusals the server's error code
+/// (<see cref="ErrorCode"/>) or a header tells them apart. A status or code no
+/// subclass covers — including 422 <c>posture_not_bound</c> and 402
+/// <c>plan_lapsed</c> — is this base type with <see cref="ErrorCode"/> preserved.
 /// Note: an un-enrolled / failing device is NOT an error — it returns a normal
 /// verdict. Only protocol/auth/quota problems raise one of these.
 /// </summary>
@@ -37,11 +41,29 @@ public class RootHeraldApiException : Exception
     }
 }
 
-/// <summary>The secret key was rejected by the Root Herald API (HTTP 401).</summary>
+/// <summary>
+/// The secret key was rejected by the Root Herald API (HTTP 401). A 401
+/// carrying <c>activation_refused</c> is <see cref="ActivationRefusedException"/>
+/// instead.
+/// </summary>
 public sealed class InvalidSecretKeyException : RootHeraldApiException
 {
     /// <summary>Create the exception.</summary>
     public InvalidSecretKeyException(string message, string? errorCode = null)
+        : base(401, message, errorCode) { }
+}
+
+/// <summary>
+/// <c>POST /api/v1/attest/activate</c> refused the enrollment (HTTP 401, error
+/// code <c>activation_refused</c>): the <c>enrollmentId</c> is unknown, spent
+/// or foreign, or the proof did not match. The secret key was accepted; this
+/// is not a credential problem. Every activation refusal reason produces this
+/// one answer.
+/// </summary>
+public sealed class ActivationRefusedException : RootHeraldApiException
+{
+    /// <summary>Create the exception.</summary>
+    public ActivationRefusedException(string message, string? errorCode = null)
         : base(401, message, errorCode) { }
 }
 
@@ -88,10 +110,35 @@ public sealed class InvalidEvidenceException : RootHeraldApiException
         : base(400, message, errorCode) { }
 }
 
-/// <summary>The account's attestation quota or rate limit was exceeded (HTTP 429).</summary>
+/// <summary>
+/// The tenant has exceeded its metered verify quota (HTTP 429 with error code
+/// <c>quota_exceeded</c> or an <c>X-RootHerald-Quota</c> header). A 429
+/// without that signal is <see cref="RateLimitedException"/>.
+/// </summary>
 public sealed class QuotaExceededException : RootHeraldApiException
 {
     /// <summary>Create the exception.</summary>
     public QuotaExceededException(string message, string? errorCode = null)
         : base(429, message, errorCode) { }
+}
+
+/// <summary>
+/// The request-rate limiter refused the call (HTTP 429 without a quota
+/// signal). Retry after <see cref="RetryAfterSeconds"/>. Distinct from
+/// <see cref="QuotaExceededException"/>, the metered billing ceiling.
+/// </summary>
+public sealed class RateLimitedException : RootHeraldApiException
+{
+    /// <summary>
+    /// Seconds to wait before retrying: the <c>Retry-After</c> header, else the
+    /// body's <c>retryAfterSeconds</c>, else null.
+    /// </summary>
+    public int? RetryAfterSeconds { get; }
+
+    /// <summary>Create the exception.</summary>
+    public RateLimitedException(string message, string? errorCode = null, int? retryAfterSeconds = null)
+        : base(429, message, errorCode)
+    {
+        RetryAfterSeconds = retryAfterSeconds;
+    }
 }

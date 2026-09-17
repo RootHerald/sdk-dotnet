@@ -73,7 +73,7 @@ public class RootHeraldBackgroundCheckClientTests
     // ── Verify ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task VerifyAsync_maps_pass_to_allow()
+    public async Task VerifyAsync_returns_the_pass_token()
     {
         var (client, handler) = Make();
         // Real wire shape: the pass/fail token lives at verdict.device.verdict,
@@ -102,8 +102,8 @@ public class RootHeraldBackgroundCheckClientTests
             JsonNode.Parse("""{"evidence":"opaque"}""")!,
             new AttestOptions { Nonce = "nonce_abc", RequestedDisclosureClass = "pseudonymous" });
 
-        Assert.Equal("allow", result.Verdict);
-        Assert.True(result.IsAllowed);
+        Assert.Equal(Verdict.Pass, result.Verdict);
+        Assert.True(result.IsPass);
         Assert.Equal(new[] { "urn:rootherald:assurance:hardware-backed" }, result.AssuranceClaimsMet);
         Assert.False(result.EnrollmentRequired);
         // Per-device appraisal fields flow through under verdict.device verbatim.
@@ -120,7 +120,7 @@ public class RootHeraldBackgroundCheckClientTests
     }
 
     [Fact]
-    public async Task VerifyAsync_maps_fail_to_deny_without_throwing()
+    public async Task VerifyAsync_returns_the_fail_token_without_throwing()
     {
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK,
@@ -138,8 +138,8 @@ public class RootHeraldBackgroundCheckClientTests
         var result = await client.VerifyAsync(
             new JsonObject(), new AttestOptions { Nonce = "nonce_abc" });
 
-        Assert.Equal("deny", result.Verdict);
-        Assert.False(result.IsAllowed);
+        Assert.Equal(Verdict.Fail, result.Verdict);
+        Assert.False(result.IsPass);
         Assert.True(result.EnrollmentRequired);
         Assert.Empty(result.AssuranceClaimsMet);
     }
@@ -167,22 +167,99 @@ public class RootHeraldBackgroundCheckClientTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.Unauthorized, typeof(InvalidSecretKeyException))]
-    [InlineData(HttpStatusCode.UnprocessableEntity, typeof(UnknownPolicyException))]
-    [InlineData(HttpStatusCode.Conflict, typeof(ChallengeException))]
-    [InlineData(HttpStatusCode.BadRequest, typeof(InvalidEvidenceException))]
-    [InlineData(HttpStatusCode.TooManyRequests, typeof(QuotaExceededException))]
-    public async Task VerifyAsync_maps_error_statuses_to_typed_exceptions(
-        HttpStatusCode status, Type expected)
+    [InlineData(HttpStatusCode.Unauthorized, "invalid_secret_key", typeof(InvalidSecretKeyException))]
+    [InlineData(HttpStatusCode.Unauthorized, "activation_refused", typeof(ActivationRefusedException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "unknown_policy", typeof(UnknownPolicyException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "admission_refused", typeof(AdmissionRefusedException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "posture_not_bound", typeof(RootHeraldApiException))]
+    [InlineData(HttpStatusCode.PaymentRequired, "plan_lapsed", typeof(RootHeraldApiException))]
+    [InlineData(HttpStatusCode.Conflict, "some_code", typeof(ChallengeException))]
+    [InlineData(HttpStatusCode.BadRequest, "some_code", typeof(InvalidEvidenceException))]
+    [InlineData(HttpStatusCode.TooManyRequests, "quota_exceeded", typeof(QuotaExceededException))]
+    [InlineData(HttpStatusCode.TooManyRequests, "rate_limited", typeof(RateLimitedException))]
+    public async Task VerifyAsync_maps_error_statuses_and_codes_to_typed_exceptions(
+        HttpStatusCode status, string code, Type expected)
     {
         var (client, handler) = Make();
-        handler.Enqueue(status, """{"error":"some_code","message":"boom"}""");
+        handler.Enqueue(status, $$"""{"error":"{{code}}","message":"boom"}""");
 
         var ex = await Assert.ThrowsAsync(expected, () =>
             client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
         var api = Assert.IsAssignableFrom<RootHeraldApiException>(ex);
         Assert.Equal((int)status, api.StatusCode);
-        Assert.Equal("some_code", api.ErrorCode);
+        Assert.Equal(code, api.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_bare_401_is_an_invalid_secret_key()
+    {
+        var (client, handler) = Make();
+        handler.EnqueueRaw(HttpStatusCode.Unauthorized, "");
+
+        await Assert.ThrowsAsync<InvalidSecretKeyException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+    }
+
+    [Fact]
+    public async Task A_limiter_429_is_rate_limited_with_retry_after_from_the_header()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.TooManyRequests,
+            """{"error":"rate_limited","message":"Too many requests","retryAfterSeconds":60}""",
+            ("Retry-After", "17"));
+
+        var ex = await Assert.ThrowsAsync<RateLimitedException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Equal(17, ex.RetryAfterSeconds);
+        Assert.Equal("rate_limited", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_limiter_429_falls_back_to_the_body_retry_hint_then_null()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.TooManyRequests, """{"error":"rate_limited","retryAfterSeconds":60}""");
+        handler.EnqueueRaw(HttpStatusCode.TooManyRequests, "");
+
+        var fromBody = await Assert.ThrowsAsync<RateLimitedException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Equal(60, fromBody.RetryAfterSeconds);
+
+        var bare = await Assert.ThrowsAsync<RateLimitedException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Null(bare.RetryAfterSeconds);
+    }
+
+    [Fact]
+    public async Task A_429_with_the_quota_header_is_the_quota_whatever_the_body()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.TooManyRequests, "{}", ("X-RootHerald-Quota", "device-limit-exceeded"));
+
+        await Assert.ThrowsAsync<QuotaExceededException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+    }
+
+    [Theory]
+    [InlineData("\"allow\"")]
+    [InlineData("\"review\"")]
+    [InlineData("\"\"")]
+    [InlineData("null")]
+    [InlineData("7")]
+    public async Task VerifyAsync_refuses_a_verdict_token_outside_pass_warn_fail(string token)
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.OK, """{"verdict":{"device":{"verdict":""" + token + "}}}");
+
+        var ex = await Assert.ThrowsAsync<RootHeraldApiException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Contains("verdict.device.verdict", ex.Message);
+    }
+
+    [Fact]
+    public void The_owned_HttpClient_times_out_after_30_seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), RootHeraldClient.DefaultTimeout);
     }
 
     // ── RelayEnroll ────────────────────────────────────────────────────────
