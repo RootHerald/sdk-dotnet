@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Breaking.
+
+- `AttestResult.Verdict` is the server's own token, `Verdict.Pass` /
+  `Verdict.Warn` / `Verdict.Fail` (`"pass"` / `"warn"` / `"fail"`), the same
+  vocabulary as every other RootHerald SDK; `"allow"` / `"deny"` / `"review"`
+  are gone and `IsAllowed` is `IsPass`. A response carrying any other token
+  throws `RootHeraldApiException` instead of reading as `"review"`.
+- `AttestResult.Key` is passed through as the server sent it; it is no longer
+  nulled on a non-passing verdict. The server withholds it when it must.
+- A 401 carrying `activation_refused` is `ActivationRefusedException`, not
+  `InvalidSecretKeyException`. A 429 without `quota_exceeded` or an
+  `X-RootHerald-Quota` header is `RateLimitedException`, with
+  `RetryAfterSeconds`, not `QuotaExceededException`. A 422 whose code is
+  neither `unknown_policy` nor `admission_refused` (`posture_not_bound`) is
+  a plain `RootHeraldApiException` with the code preserved.
+- The `HttpClient` the constructor creates times out after 30 s
+  (`RootHeraldClient.DefaultTimeout`); a caller-supplied client keeps its own.
+- `CertifiedKey.AuthPolicy` is documented as hex, which is what the server
+  sends.
+
 ## 0.1.0-preview.4
 
 Breaking. Nothing the backend sends locates a row by an id the server

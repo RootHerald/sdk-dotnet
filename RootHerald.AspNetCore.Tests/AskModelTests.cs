@@ -107,7 +107,7 @@ public class AskModelTests
 
         var result = await client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" });
 
-        Assert.True(result.IsAllowed);
+        Assert.True(result.IsPass);
         Assert.Equal("dev_1", result.DeviceId);
         var key = Assert.IsType<CertifiedKey>(result.Key);
         Assert.Equal("key_1", key.KeyId);
@@ -122,8 +122,11 @@ public class AskModelTests
         Assert.Null(result.VerdictData["key"]);
     }
 
+    // No key on the wire means Key is null; a key the server did send is passed
+    // through whatever the verdict, the same as every other SDK. The server is
+    // the one that withholds it on a non-passing verdict.
     [Fact]
-    public async Task VerifyAsync_key_is_null_when_absent_or_beside_a_failing_verdict()
+    public async Task VerifyAsync_key_is_null_when_absent_and_passed_through_whatever_the_verdict()
     {
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.OK, """{"verdict":{"device":{"verdict":"pass"}}}""");
@@ -141,8 +144,8 @@ public class AskModelTests
         Assert.Null(absent.DeviceId);
 
         var failed = await client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "bm9uY2U" });
-        Assert.Equal("deny", failed.Verdict);
-        Assert.Null(failed.Key);
+        Assert.Equal(Verdict.Fail, failed.Verdict);
+        Assert.Equal("key_1", Assert.IsType<CertifiedKey>(failed.Key).KeyId);
     }
 
     [Fact]
@@ -162,6 +165,7 @@ public class AskModelTests
     [InlineData("admission_refused", typeof(AdmissionRefusedException))]
     [InlineData("unknown_policy", typeof(UnknownPolicyException))]
     [InlineData(null, typeof(UnknownPolicyException))]
+    [InlineData("posture_not_bound", typeof(RootHeraldApiException))]
     public async Task A_422_is_told_apart_by_its_error_code(string? code, Type expected)
     {
         var (client, handler) = Make();

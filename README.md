@@ -38,7 +38,7 @@ var result = await rh.VerifyAsync(evidence, new AttestOptions
     Nonce = challenge.Nonce,
 });
 
-if (result.IsAllowed) { /* proceed */ }
+if (result.IsPass) { /* proceed */ }
 ```
 
 Policies bind to your API key, not to calls. The key carries an identity
@@ -83,12 +83,14 @@ An iOS blob (`Platform = "ios"`, with `IosKeyId`, `IosAttestationObject` and
 `Nonce`) is one leg: the server answers `{}`, `enroll.Challenge` is null, and
 there is nothing to activate.
 
-An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an
+An un-enrolled / failing device is a verdict (`"fail"`/`"warn"`), **not** an
 exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`
-(401), `UnknownPolicyException` / `AdmissionRefusedException` (422, told apart
-by `ErrorCode`),
-`ChallengeException` (409), `InvalidEvidenceException` (400),
-`QuotaExceededException` (429).
+/ `ActivationRefusedException` (401, told apart by `ErrorCode`),
+`UnknownPolicyException` / `AdmissionRefusedException` (422, told apart by
+`ErrorCode`), `ChallengeException` (409), `InvalidEvidenceException` (400),
+`QuotaExceededException` / `RateLimitedException` (429, told apart by
+`ErrorCode` or the `X-RootHerald-Quota` header). See
+[`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md#errors).
 
 ## Target frameworks
 
