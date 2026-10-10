@@ -12,8 +12,8 @@ namespace RootHerald.AspNetCore;
 ///   <item><description>422 <c>admission_refused</c> → <see cref="AdmissionRefusedException"/></description></item>
 ///   <item><description>409 <c>key_rotation_conflict</c> → this base type</description></item>
 ///   <item><description>409, any other → <see cref="ChallengeException"/></description></item>
-///   <item><description>400 <c>invalid_ask</c> → <see cref="InvalidAskException"/></description></item>
-///   <item><description>400, any other (including <c>wire_version_unsupported</c>, <c>invalid_enroll_shape</c>) → <see cref="InvalidEvidenceException"/></description></item>
+///   <item><description>400 <c>invalid_ask</c> or <c>invalid_purpose</c> → <see cref="InvalidAskException"/></description></item>
+///   <item><description>400, any other (including <c>wire_version_unsupported</c>, <c>invalid_enroll_shape</c>, <c>invalid_certification</c>) → <see cref="InvalidEvidenceException"/></description></item>
 ///   <item><description>429 <c>budget_exhausted</c>, or an <c>X-RootHerald-Quota</c> header → <see cref="QuotaExceededException"/></description></item>
 ///   <item><description>429, any other → <see cref="RateLimitedException"/></description></item>
 ///   <item><description>200 whose verdict does not echo the binding the challenge named → <see cref="ExpectedNotEnforcedException"/></description></item>
@@ -21,7 +21,8 @@ namespace RootHerald.AspNetCore;
 /// Where one status carries two refusals the server's error code
 /// (<see cref="ErrorCode"/>) or a header tells them apart. A status or code no
 /// subclass covers — including 422 <c>posture_not_bound</c>,
-/// <c>expected_unknown</c> and <c>key_disclosure_too_low</c>, and 402
+/// <c>expected_unknown</c>, <c>key_disclosure_too_low</c>, <c>purpose_unsupported</c>
+/// and <c>certification_rejected</c>, and 402
 /// <c>plan_lapsed</c> — is this base type with <see cref="ErrorCode"/> preserved.
 /// Note: an un-enrolled / failing device is NOT an error — it returns a normal
 /// verdict. Only protocol/auth/budget problems raise one of these.
@@ -113,9 +114,10 @@ public sealed class ChallengeException : RootHeraldApiException
 /// The relayed blob was malformed or could not be appraised (HTTP 400). This
 /// includes <c>wire_version_unsupported</c> (a 7.0-shaped enroll body) and
 /// <c>invalid_enroll_shape</c> (an attestation key whose qualified name does
-/// not follow from its parent). An un-enrolled / failing device is NOT this
-/// exception — that returns a verdict. A 400 carrying <c>invalid_ask</c> is
-/// <see cref="InvalidAskException"/>.
+/// not follow from its parent) and <c>invalid_certification</c> (a certify
+/// body the server cannot read). An un-enrolled / failing device is NOT this
+/// exception — that returns a verdict. A 400 carrying <c>invalid_ask</c> or
+/// <c>invalid_purpose</c> is <see cref="InvalidAskException"/>.
 /// </summary>
 public sealed class InvalidEvidenceException : RootHeraldApiException
 {
@@ -126,7 +128,8 @@ public sealed class InvalidEvidenceException : RootHeraldApiException
 
 /// <summary>
 /// The challenge named an ask the server does not know, such as the retired
-/// <c>"key"</c> (HTTP 400, error code <c>invalid_ask</c>). The backend's code
+/// <c>"key"</c> (HTTP 400, error code <c>invalid_ask</c>), or the key challenge
+/// named a purpose it does not know (<c>invalid_purpose</c>). The backend's code
 /// is wrong, not the device: keys are minted with
 /// <see cref="RootHeraldClient.IssueKeyChallengeAsync"/>.
 /// </summary>

@@ -110,6 +110,18 @@ public class AskModelTests
         Assert.Equal("invalid_ask", ex.ErrorCode);
     }
 
+    [Fact]
+    public async Task A_400_invalid_purpose_is_a_programming_error_not_invalid_evidence()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.BadRequest, """{"error":"invalid_purpose","message":"purpose must be one of sign, decrypt"}""");
+
+        var ex = await Assert.ThrowsAsync<InvalidAskException>(() =>
+            client.IssueKeyChallengeAsync(new KeyChallengeOptions { Purpose = "sign" }));
+        Assert.Equal(400, ex.StatusCode);
+        Assert.Equal("invalid_purpose", ex.ErrorCode);
+    }
+
     // ── Verify: the echoed binding ─────────────────────────────────────────
 
     private static string PassFor(string ueid, string? expectedJson)

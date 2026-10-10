@@ -39,8 +39,10 @@ Breaking.
   Name }`; the `quota_exceeded` code is gone. A 409 `key_rotation_conflict` is
   a plain `RootHeraldApiException`, not `ChallengeException`. A 400
   `wire_version_unsupported` or `invalid_enroll_shape` is
-  `InvalidEvidenceException`; a 422 `expected_unknown` or
-  `key_disclosure_too_low` is a plain `RootHeraldApiException`.
+  `InvalidEvidenceException`, as is a 400 `invalid_certification`; a 400
+  `invalid_purpose` is `InvalidAskException`; a 422 `expected_unknown`,
+  `key_disclosure_too_low`, `purpose_unsupported` or `certification_rejected`
+  is a plain `RootHeraldApiException`.
 - Carried over from the unreleased changes after `0.1.0-preview.4`:
   `AttestResult.Verdict` is the server's own token, `Verdict.Pass` /
   `Verdict.Warn` / `Verdict.Fail`, and `IsAllowed` is `IsPass`; a 401

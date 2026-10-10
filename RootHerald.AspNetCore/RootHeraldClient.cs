@@ -316,6 +316,7 @@ public sealed class RootHeraldClient
     private const string CodeUnknownPolicy = "unknown_policy";
     private const string CodeKeyRotationConflict = "key_rotation_conflict";
     private const string CodeInvalidAsk = "invalid_ask";
+    private const string CodeInvalidPurpose = "invalid_purpose";
     private const string CodeBudgetExhausted = "budget_exhausted";
 
     // Marks a 429 as the budget, whatever the body says.
@@ -980,7 +981,7 @@ public sealed class RootHeraldClient
                 new UnknownPolicyException(message ?? "unknown policy", errorCode),
             HttpStatusCode.Conflict when errorCode != CodeKeyRotationConflict =>
                 new ChallengeException(message ?? "challenge invalid or expired", errorCode),
-            HttpStatusCode.BadRequest when errorCode == CodeInvalidAsk =>
+            HttpStatusCode.BadRequest when errorCode is CodeInvalidAsk or CodeInvalidPurpose =>
                 new InvalidAskException(message ?? "invalid ask", errorCode),
             HttpStatusCode.BadRequest => new InvalidEvidenceException(message ?? "invalid evidence", errorCode),
             HttpStatusCode.TooManyRequests when errorCode == CodeBudgetExhausted || response.Headers.Contains(QuotaHeader) =>

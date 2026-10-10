@@ -229,13 +229,13 @@ and the server's `ErrorCode`:
 | ------ | ------------------------------------------------------------------------ | ------------------------------- |
 | 401    | `activation_refused`                                                     | `ActivationRefusedException`    |
 | 401    | anything else                                                            | `InvalidSecretKeyException`     |
-| 400    | `invalid_ask`                                                            | `InvalidAskException`           |
-| 400    | anything else, including `wire_version_unsupported`, `invalid_enroll_shape` | `InvalidEvidenceException`   |
+| 400    | `invalid_ask`, `invalid_purpose`                                         | `InvalidAskException`           |
+| 400    | anything else, including `wire_version_unsupported`, `invalid_enroll_shape`, `invalid_certification` | `InvalidEvidenceException` |
 | 409    | `key_rotation_conflict`                                                  | `RootHeraldApiException`        |
-| 409    | anything else                                                            | `ChallengeException`            |
+| 409    | anything else, including `challenge_expired_or_used`                     | `ChallengeException`            |
 | 422    | `unknown_policy`, or none                                                | `UnknownPolicyException`        |
 | 422    | `admission_refused`                                                      | `AdmissionRefusedException`     |
-| 422    | `expected_unknown`, `key_disclosure_too_low`                             | `RootHeraldApiException`        |
+| 422    | `expected_unknown`, `key_disclosure_too_low`, `purpose_unsupported`, `certification_rejected` | `RootHeraldApiException` |
 | 429    | `budget_exhausted`, or an `X-RootHerald-Quota` header                    | `QuotaExceededException` (`Budget`) |
 | 429    | anything else                                                            | `RateLimitedException`          |
 

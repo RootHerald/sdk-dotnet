@@ -184,6 +184,13 @@ public class RootHeraldBackgroundCheckClientTests
     [InlineData(HttpStatusCode.Conflict, "key_rotation_conflict", typeof(RootHeraldApiException))]
     [InlineData(HttpStatusCode.BadRequest, "some_code", typeof(InvalidEvidenceException))]
     [InlineData(HttpStatusCode.BadRequest, "invalid_ask", typeof(InvalidAskException))]
+    [InlineData(HttpStatusCode.BadRequest, "invalid_purpose", typeof(InvalidAskException))]
+    [InlineData(HttpStatusCode.BadRequest, "invalid_certification", typeof(InvalidEvidenceException))]
+    [InlineData(HttpStatusCode.Conflict, "challenge_expired_or_used", typeof(ChallengeException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "certification_rejected", typeof(RootHeraldApiException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "key_disclosure_too_low", typeof(RootHeraldApiException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "expected_unknown", typeof(RootHeraldApiException))]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "purpose_unsupported", typeof(RootHeraldApiException))]
     [InlineData(HttpStatusCode.TooManyRequests, "budget_exhausted", typeof(QuotaExceededException))]
     [InlineData(HttpStatusCode.TooManyRequests, "rate_limited", typeof(RateLimitedException))]
     public async Task VerifyAsync_maps_error_statuses_and_codes_to_typed_exceptions(
