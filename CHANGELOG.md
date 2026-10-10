@@ -1,26 +1,68 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-preview.5
+
+Wire 8.0. Every installation of a client has its own attestation key, created
+inside the TPM at enrollment and handed back as an opaque AK blob the client
+keeps and passes to every attest and mint. Keys are minted in their own
+ceremony. A backend on this version cannot drive a 7.0 client, and the
+reverse; the server refuses a 7.0-shaped enroll body with
+`400 wire_version_unsupported`.
 
 Breaking.
 
-- `AttestResult.Verdict` is the server's own token, `Verdict.Pass` /
-  `Verdict.Warn` / `Verdict.Fail` (`"pass"` / `"warn"` / `"fail"`), the same
-  vocabulary as every other RootHerald SDK; `"allow"` / `"deny"` / `"review"`
-  are gone and `IsAllowed` is `IsPass`. A response carrying any other token
-  throws `RootHeraldApiException` instead of reading as `"review"`.
-- `AttestResult.Key` is passed through as the server sent it; it is no longer
-  nulled on a non-passing verdict. The server withholds it when it must.
-- A 401 carrying `activation_refused` is `ActivationRefusedException`, not
-  `InvalidSecretKeyException`. A 429 without `quota_exceeded` or an
-  `X-RootHerald-Quota` header is `RateLimitedException`, with
-  `RetryAfterSeconds`, not `QuotaExceededException`. A 422 whose code is
-  neither `unknown_policy` nor `admission_refused` (`posture_not_bound`) is
-  a plain `RootHeraldApiException` with the code preserved.
-- The `HttpClient` the constructor creates times out after 30 s
-  (`RootHeraldClient.DefaultTimeout`); a caller-supplied client keeps its own.
-- `CertifiedKey.AuthPolicy` is documented as hex, which is what the server
-  sends.
+- `RelayEnrollAsync` takes the 8.0 TPM body: `EnrollRequestBlob.AttestationKey`
+  (`AttestationKeyPublic { PublicArea, ParentPublicArea, QualifiedName }`)
+  replaces the top-level `AkPublicArea` on `windows` / `linux`, and a flat TPM
+  body is refused locally with `ArgumentException`. `AkPublicArea` stays for
+  `macos`; the iOS body is unchanged. A new `RelayEnrollAsync(JsonObject)`
+  overload relays the client's JSON as-is, and the typed records keep fields
+  they do not model (`ExtensionData`), so every body is relayed whole.
+- Keys are minted by `IssueKeyChallengeAsync(new KeyChallengeOptions {
+  Purpose, ExpectedDevices? })` → `RootHeraldKeyChallenge` →
+  `CertifyKeyAsync(nonce, certification)` → `CertifiedKey { DeviceId, KeyId,
+  Purpose, Alg, Format?, Jwk, HardwareBound, CertifiedAt }`. `Ask.Key`,
+  `ChallengeOptions.KeyPurpose` and `AttestResult.Key` are removed, and
+  `CertifiedKey.AuthPolicy` with them; a challenge that still asks for
+  `"key"` is `InvalidAskException` (400 `invalid_ask`), not
+  `InvalidEvidenceException`.
+- `IssueChallengeAsync` takes `ChallengeOptions.ExpectedKey` and
+  `ExpectedDevices` and no longer takes `DeviceHint`; the
+  `IssueChallengeAsync(string? deviceHint)` overload is gone. Pass the same
+  values in `AttestOptions`: a verdict that does not echo them under
+  `verdict.expected` (`AttestResult.Expected`) is refused with
+  `ExpectedNotEnforcedException`.
+- `CertifiedKey.Jwk` is EC P-256 or RSA-2048; `VerifyKeySignature` checks
+  ES256 (raw `r||s` or DER) and RS256 (PKCS#1 v1.5 over SHA-256, modulus at
+  least 2048 bits). P-384 is no longer accepted: no client certifies one.
+- A 429 `budget_exhausted` is `QuotaExceededException` with `Budget { Id,
+  Name }`; the `quota_exceeded` code is gone. A 409 `key_rotation_conflict` is
+  a plain `RootHeraldApiException`, not `ChallengeException`. A 400
+  `wire_version_unsupported` or `invalid_enroll_shape` is
+  `InvalidEvidenceException`; a 422 `expected_unknown` or
+  `key_disclosure_too_low` is a plain `RootHeraldApiException`.
+- Carried over from the unreleased changes after `0.1.0-preview.4`:
+  `AttestResult.Verdict` is the server's own token, `Verdict.Pass` /
+  `Verdict.Warn` / `Verdict.Fail`, and `IsAllowed` is `IsPass`; a 401
+  `activation_refused` is `ActivationRefusedException`; a 429 without a
+  budget signal is `RateLimitedException` with `RetryAfterSeconds`; a 422
+  whose code no subclass covers is a plain `RootHeraldApiException`; the
+  `HttpClient` the constructor creates times out after 30 s.
+
+Migration.
+
+1. Re-enroll every installation: the client's `EnrollBegin` now returns an
+   AK blob, which the client keeps and passes to `Attest` and `MintKey`.
+2. Replace `IssueChallengeAsync(new ChallengeOptions { Ask = [Identity, Key],
+   KeyPurpose = "sign" })` plus `result.Key` with
+   `IssueKeyChallengeAsync(new KeyChallengeOptions { Purpose = KeyPurpose.Sign,
+   ExpectedDevices = [alias] })` and `CertifyKeyAsync(nonce, certification)`.
+3. Drop `DeviceHint`; bind a challenge to a device with `ExpectedDevices`,
+   and pass the same list to `VerifyAsync`.
+4. Build TPM enroll bodies with `AttestationKey`, or relay the client's JSON
+   through `RelayEnrollAsync(JsonObject)`.
+5. Catch `InvalidAskException` where a wrong ask was previously
+   `InvalidEvidenceException`, and read `QuotaExceededException.Budget`.
 
 ## 0.1.0-preview.4
 

@@ -48,14 +48,14 @@ public class RootHeraldBackgroundCheckClientTests
         handler.Enqueue(HttpStatusCode.OK,
             """{"nonce":"nonce_abc","challenge":"rhc1.nonce_abc.e30","expiresAt":"2026-07-01T00:00:00Z"}""");
 
-        var result = await client.IssueChallengeAsync("device-hint");
+        var result = await client.IssueChallengeAsync();
 
         Assert.Equal("nonce_abc", result.Nonce);
         Assert.Equal("rhc1.nonce_abc.e30", result.Challenge);
         Assert.Equal("2026-07-01T00:00:00Z", result.ExpiresAt);
         Assert.Equal("/api/v1/attest/challenge", handler.LastRequestPath);
         Assert.Equal($"Bearer {SecretKey}", handler.LastAuthorization);
-        Assert.Equal("device-hint", handler.LastBody?["deviceHint"]?.GetValue<string>());
+        Assert.Empty(Assert.IsType<JsonObject>(handler.LastBody));
     }
 
     [Theory]
@@ -90,11 +90,15 @@ public class RootHeraldBackgroundCheckClientTests
                   "earStatus": "affirming",
                   "verdict": "pass",
                   "attestationType": "tpm20",
-                  "quoteVerified": true
+                  "quoteVerified": true,
+                  "tpmKind": "firmware-tpm",
+                  "bootChanged": true,
+                  "bootChangedStages": [0, 4]
                 }
               },
               "assuranceClaimsMet": ["urn:rootherald:assurance:hardware-backed"],
-              "enrollmentRequired": false
+              "enrollmentRequired": false,
+              "key": { "keyId": "stale" }
             }
             """);
 
@@ -109,6 +113,9 @@ public class RootHeraldBackgroundCheckClientTests
         // Per-device appraisal fields flow through under verdict.device verbatim.
         Assert.Equal("affirming", result.VerdictData["device"]?["earStatus"]?.GetValue<string>());
         Assert.Equal("tpm20", result.VerdictData["device"]?["attestationType"]?.GetValue<string>());
+        Assert.Equal("firmware-tpm", result.VerdictData["device"]?["tpmKind"]?.GetValue<string>());
+        Assert.Equal(new[] { 0, 4 }, result.VerdictData["device"]?["bootChangedStages"]?.AsArray().Select(n => n!.GetValue<int>()));
+        Assert.Null(result.Expected);
         Assert.Equal("/api/v1/attest/verify", handler.LastRequestPath);
         Assert.Equal("nonce_abc", handler.LastBody?["nonce"]?.GetValue<string>());
         Assert.False(handler.LastBody!.AsObject().ContainsKey("challengeId"), "challengeId was sent; the nonce is the handle");
@@ -174,8 +181,10 @@ public class RootHeraldBackgroundCheckClientTests
     [InlineData(HttpStatusCode.UnprocessableEntity, "posture_not_bound", typeof(RootHeraldApiException))]
     [InlineData(HttpStatusCode.PaymentRequired, "plan_lapsed", typeof(RootHeraldApiException))]
     [InlineData(HttpStatusCode.Conflict, "some_code", typeof(ChallengeException))]
+    [InlineData(HttpStatusCode.Conflict, "key_rotation_conflict", typeof(RootHeraldApiException))]
     [InlineData(HttpStatusCode.BadRequest, "some_code", typeof(InvalidEvidenceException))]
-    [InlineData(HttpStatusCode.TooManyRequests, "quota_exceeded", typeof(QuotaExceededException))]
+    [InlineData(HttpStatusCode.BadRequest, "invalid_ask", typeof(InvalidAskException))]
+    [InlineData(HttpStatusCode.TooManyRequests, "budget_exhausted", typeof(QuotaExceededException))]
     [InlineData(HttpStatusCode.TooManyRequests, "rate_limited", typeof(RateLimitedException))]
     public async Task VerifyAsync_maps_error_statuses_and_codes_to_typed_exceptions(
         HttpStatusCode status, string code, Type expected)
@@ -186,8 +195,25 @@ public class RootHeraldBackgroundCheckClientTests
         var ex = await Assert.ThrowsAsync(expected, () =>
             client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
         var api = Assert.IsAssignableFrom<RootHeraldApiException>(ex);
+        Assert.Equal(expected, api.GetType());
         Assert.Equal((int)status, api.StatusCode);
         Assert.Equal(code, api.ErrorCode);
+    }
+
+    [Fact]
+    public async Task A_budget_429_names_the_budget_that_refused()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.TooManyRequests,
+            """{"error":"budget_exhausted","message":"budget exhausted","budget":{"id":"bgt_1","name":"Production"}}""",
+            ("X-RootHerald-Quota", "budget-exhausted"));
+
+        var ex = await Assert.ThrowsAsync<QuotaExceededException>(() =>
+            client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Equal("budget_exhausted", ex.ErrorCode);
+        var budget = Assert.IsType<RefusingBudget>(ex.Budget);
+        Assert.Equal("bgt_1", budget.Id);
+        Assert.Equal("Production", budget.Name);
     }
 
     [Fact]
@@ -234,10 +260,11 @@ public class RootHeraldBackgroundCheckClientTests
     public async Task A_429_with_the_quota_header_is_the_quota_whatever_the_body()
     {
         var (client, handler) = Make();
-        handler.Enqueue(HttpStatusCode.TooManyRequests, "{}", ("X-RootHerald-Quota", "device-limit-exceeded"));
+        handler.Enqueue(HttpStatusCode.TooManyRequests, "{}", ("X-RootHerald-Quota", "budget-exhausted"));
 
-        await Assert.ThrowsAsync<QuotaExceededException>(() =>
+        var ex = await Assert.ThrowsAsync<QuotaExceededException>(() =>
             client.VerifyAsync(new JsonObject(), new AttestOptions { Nonce = "nonce_abc" }));
+        Assert.Null(ex.Budget);
     }
 
     [Theory]
@@ -268,7 +295,19 @@ public class RootHeraldBackgroundCheckClientTests
     {
         Platform = platform,
         EkPublicKey = "ekpub",
-        AkPublicArea = "akpub",
+        AttestationKey = new AttestationKeyPublic
+        {
+            PublicArea = "akpub",
+            ParentPublicArea = "srk",
+            QualifiedName = "qn",
+        },
+    };
+
+    private static EnrollRequestBlob MacBlob() => new()
+    {
+        Platform = "macos",
+        EkPublicKey = "enclave",
+        AkPublicArea = "enclave",
     };
 
     private static EnrollRequestBlob IosBlob() => new()
@@ -299,15 +338,17 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.Null(challenge.ChallengeNonce);
         Assert.Equal("/api/v1/attest/enroll", handler.LastRequestPath);
         Assert.Equal($"Bearer {SecretKey}", handler.LastAuthorization);
-        // Wire-shape: camelCase keys, relayed verbatim.
+        // Wire-shape: camelCase keys, the AK nested, relayed verbatim.
         var body = Assert.IsType<JsonObject>(handler.LastBody);
         Assert.Equal("ekpub", body["ekPublicKey"]?.GetValue<string>());
-        Assert.Equal("akpub", body["akPublicArea"]?.GetValue<string>());
+        Assert.Equal("akpub", body["attestationKey"]?["publicArea"]?.GetValue<string>());
+        Assert.Equal("srk", body["attestationKey"]?["parentPublicArea"]?.GetValue<string>());
+        Assert.Equal("qn", body["attestationKey"]?["qualifiedName"]?.GetValue<string>());
         Assert.Equal("windows", body["platform"]?.GetValue<string>());
         Assert.Equal("-----BEGIN CERTIFICATE-----", body["ekCertPem"]?.GetValue<string>());
         Assert.Equal("INTC", body["tpmSelfReport"]?["manufacturer"]?.GetValue<string>());
         Assert.Equal("Intel", body["tpmSelfReport"]?["vendorString"]?.GetValue<string>());
-        foreach (var k in new[] { "challengeId", "deviceId", "nonce", "iosKeyId", "iosAttestationObject" })
+        foreach (var k in new[] { "akPublicArea", "challengeId", "deviceId", "nonce", "iosKeyId", "iosAttestationObject" })
             Assert.False(body.ContainsKey(k), $"{k} was sent on a TPM enroll");
     }
 
@@ -317,13 +358,17 @@ public class RootHeraldBackgroundCheckClientTests
         var (client, handler) = Make();
         handler.Enqueue(HttpStatusCode.Created, """{"enrollmentId":"enr_1","challengeNonce":"bm9uY2U="}""");
 
-        var result = await client.RelayEnrollAsync(TpmBlob("macos"));
+        var result = await client.RelayEnrollAsync(MacBlob());
 
         var challenge = Assert.IsType<EnrollActivationChallenge>(result.Challenge);
         Assert.Equal("enr_1", challenge.EnrollmentId);
         Assert.Equal("bm9uY2U=", challenge.ChallengeNonce);
         Assert.Null(challenge.CredentialBlob);
         Assert.Null(challenge.EncryptedSecret);
+        // The macOS body stays flat.
+        var body = Assert.IsType<JsonObject>(handler.LastBody);
+        Assert.Equal("enclave", body["akPublicArea"]?.GetValue<string>());
+        Assert.False(body.ContainsKey("attestationKey"));
     }
 
     [Fact]
@@ -343,6 +388,7 @@ public class RootHeraldBackgroundCheckClientTests
         Assert.Equal("bm9uY2U", body["nonce"]?.GetValue<string>());
         Assert.False(body.ContainsKey("ekPublicKey"));
         Assert.False(body.ContainsKey("akPublicArea"));
+        Assert.False(body.ContainsKey("attestationKey"));
     }
 
     [Fact]
@@ -392,14 +438,96 @@ public class RootHeraldBackgroundCheckClientTests
     [Theory]
     [InlineData("windows")]
     [InlineData("linux")]
-    [InlineData("macos")]
-    public async Task RelayEnrollAsync_tpm_platforms_require_the_key_material(string platform)
+    public async Task RelayEnrollAsync_tpm_platforms_require_the_nested_attestation_key(string platform)
     {
-        var (client, _) = Make();
+        var (client, handler) = Make();
         await Assert.ThrowsAsync<ArgumentException>(() =>
             client.RelayEnrollAsync(TpmBlob(platform) with { EkPublicKey = "" }));
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.RelayEnrollAsync(TpmBlob(platform) with { AkPublicArea = null }));
+            client.RelayEnrollAsync(TpmBlob(platform) with { AttestationKey = null }));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(TpmBlob(platform) with
+            {
+                AttestationKey = new AttestationKeyPublic { PublicArea = "akpub", ParentPublicArea = "srk", QualifiedName = "" },
+            }));
+        // The flat 7.0 body is refused before any request.
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(TpmBlob(platform) with { AttestationKey = null, AkPublicArea = "akpub" }));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(TpmBlob(platform) with { AkPublicArea = "akpub" }));
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task RelayEnrollAsync_macos_requires_the_flat_body()
+    {
+        var (client, handler) = Make();
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(MacBlob() with { EkPublicKey = "" }));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(MacBlob() with { AkPublicArea = null }));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(MacBlob() with
+            {
+                AttestationKey = new AttestationKeyPublic { PublicArea = "a", ParentPublicArea = "b", QualifiedName = "c" },
+            }));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(MacBlob() with { Platform = "freebsd" }));
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    private const string DeviceBody =
+        """
+        {
+          "ekPublicKey": "ekpub",
+          "attestationKey": { "publicArea": "akpub", "parentPublicArea": "srk", "qualifiedName": "qn", "futureNested": 1 },
+          "platform": "linux",
+          "ekCertificateChain": ["-----BEGIN CERTIFICATE-----"],
+          "tpmSelfReport": { "manufacturer": "INTC", "vendorString": "Intel" },
+          "futureField": { "x": [1, 2] }
+        }
+        """;
+
+    [Fact]
+    public async Task RelayEnrollAsync_relays_a_deserialized_device_body_whole()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.Created,
+            """{"enrollmentId":"enr_1","credentialBlob":"cred","encryptedSecret":"sec"}""");
+        var blob = System.Text.Json.JsonSerializer.Deserialize<EnrollRequestBlob>(DeviceBody)!;
+
+        await client.RelayEnrollAsync(blob);
+
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(DeviceBody), handler.LastBody),
+            $"body was not relayed whole: {handler.LastBody}");
+    }
+
+    [Fact]
+    public async Task RelayEnrollAsync_relays_a_json_device_body_verbatim()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.Created,
+            """{"enrollmentId":"enr_1","credentialBlob":"cred","encryptedSecret":"sec"}""");
+
+        var result = await client.RelayEnrollAsync(JsonNode.Parse(DeviceBody)!.AsObject());
+
+        Assert.Equal("enr_1", result.Challenge?.EnrollmentId);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(DeviceBody), handler.LastBody));
+    }
+
+    [Theory]
+    [InlineData("""{"platform":"windows","ekPublicKey":"ekpub","akPublicArea":"akpub"}""")]
+    [InlineData("""{"platform":"linux","ekPublicKey":"ekpub","attestationKey":{"publicArea":"a","parentPublicArea":"b"}}""")]
+    [InlineData("""{"platform":"macos","ekPublicKey":"e","akPublicArea":"e","attestationKey":{"publicArea":"a","parentPublicArea":"b","qualifiedName":"c"}}""")]
+    [InlineData("""{"platform":"ios","iosKeyId":"k","iosAttestationObject":"o"}""")]
+    [InlineData("""{"ekPublicKey":"ekpub","attestationKey":{"publicArea":"a","parentPublicArea":"b","qualifiedName":"c"}}""")]
+    [InlineData("""{"platform":7}""")]
+    public async Task RelayEnrollAsync_refuses_a_malformed_json_body_locally(string body)
+    {
+        var (client, handler) = Make();
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.RelayEnrollAsync(JsonNode.Parse(body)!.AsObject()));
+        Assert.Equal(0, handler.RequestCount);
     }
 
     [Fact]

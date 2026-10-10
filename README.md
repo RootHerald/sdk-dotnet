@@ -6,15 +6,15 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Background-Check (server → server)** via `RootHeraldClient` — appraise a client-collected evidence blob with your `rh_sk_` secret key and get back a verdict | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.4`, not yet on NuGet) |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Backend relay (server → server)** via `RootHeraldClient` — enroll an installation, mint a device-bound key, and appraise a client-collected evidence blob with your `rh_sk_` secret key | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.5`, wire 8.0, not yet on NuGet) |
 
-## Quick start: Background-Check (server → server)
+## Quick start: attest (server → server)
 
 ```bash
 dotnet add package RootHerald.AspNetCore
 ```
 
-Your dumb client collects an opaque evidence blob and hands it to *your* server,
+Your client collects an opaque evidence blob and hands it to *your* server,
 which appraises it with Root Herald using your `rh_sk_` secret key. The client
 never holds a key or talks to Root Herald.
 
@@ -38,7 +38,7 @@ var result = await rh.VerifyAsync(evidence, new AttestOptions
     Nonce = challenge.Nonce,
 });
 
-if (result.IsPass) { /* proceed */ }
+if (result.IsPass) { /* result.DeviceId is the alias: bind the session to it */ }
 ```
 
 Policies bind to your API key, not to calls. The key carries an identity
@@ -48,25 +48,20 @@ challenge when it is minted. Change what a key enforces from the dashboard or
 
 Pure managed C#. No native dependencies. Single-file publish works with no DLL
 shipped alongside. See [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md)
-for the full surface: the verdict shape, the ask model and device-bound
+for the full surface: the verdict shape, the challenge binding, device-bound
 signing keys, the enroll relay, and common patterns.
 
-## Quick start: Enroll relay (one-time device bootstrap)
+## Quick start: enroll relay (one-time per installation)
 
-The keyless client produces opaque enroll blobs; your backend relays them to Root
+The client produces opaque enroll blobs; your backend relays them to Root
 Herald with the `rh_sk_` secret. Enrollment always issues a MakeCredential
-challenge (`201`), including for a device already known — re-enrollment is how a
-device rotates its attestation key — so both legs always run.
+challenge (`201`), including for a device already known — each activation
+creates a new installation with its own attestation key — so both legs always
+run.
 
 ```csharp
-// Leg 1 — relay the client's EnrollBegin() blob.
-var enroll = await rh.RelayEnrollAsync(new EnrollRequestBlob
-{
-    EkPublicKey  = blob.EkPublicKey,   // base64 EK public
-    AkPublicArea = blob.AkPublicArea,  // base64 TPM2B_PUBLIC of the AK
-    Platform     = "windows",
-    EkCertPem    = blob.EkCertPem,     // optional
-});
+// Leg 1 — relay the client's EnrollBegin() body as your endpoint received it.
+var enroll = await rh.RelayEnrollAsync(JsonNode.Parse(body)!.AsObject());
 
 // Hand enroll.Challenge to the client's EnrollComplete() verbatim; then relay
 // its output, leg 2.
@@ -79,15 +74,18 @@ var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
 // the device's: never relay it back.
 ```
 
-An iOS blob (`Platform = "ios"`, with `IosKeyId`, `IosAttestationObject` and
-`Nonce`) is one leg: the server answers `{}`, `enroll.Challenge` is null, and
-there is nothing to activate.
+The typed `EnrollRequestBlob` overload takes the same body: `"windows"` /
+`"linux"` carry `EkPublicKey` and the nested `AttestationKey`; `"macos"`
+carries `EkPublicKey` and `AkPublicArea`. An iOS blob (`Platform = "ios"`,
+with `IosKeyId`, `IosAttestationObject` and `Nonce`) is one leg: the server
+answers `{}`, `enroll.Challenge` is null, and there is nothing to activate.
 
 An un-enrolled / failing device is a verdict (`"fail"`/`"warn"`), **not** an
-exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException`
+exception. Only protocol/auth/budget problems throw: `InvalidSecretKeyException`
 / `ActivationRefusedException` (401, told apart by `ErrorCode`),
 `UnknownPolicyException` / `AdmissionRefusedException` (422, told apart by
-`ErrorCode`), `ChallengeException` (409), `InvalidEvidenceException` (400),
+`ErrorCode`), `ChallengeException` (409), `InvalidEvidenceException` /
+`InvalidAskException` (400, told apart by `ErrorCode`),
 `QuotaExceededException` / `RateLimitedException` (429, told apart by
 `ErrorCode` or the `X-RootHerald-Quota` header). See
 [`RootHerald.AspNetCore/README.md`](./RootHerald.AspNetCore/README.md#errors).

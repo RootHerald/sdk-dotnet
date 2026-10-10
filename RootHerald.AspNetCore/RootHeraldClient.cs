@@ -7,9 +7,8 @@ using System.Text.Json.Nodes;
 namespace RootHerald.AspNetCore;
 
 /// <summary>
-/// A challenge minted by
-/// <see cref="RootHeraldClient.IssueChallengeAsync(ChallengeOptions?, CancellationToken)"/>.
-/// Relay <see cref="Challenge"/> to the dumb client verbatim; it parses the
+/// A challenge minted by <see cref="RootHeraldClient.IssueChallengeAsync"/>.
+/// Relay <see cref="Challenge"/> to the client verbatim; it parses the
 /// nonce and the ask from it, quotes over the nonce, and returns an opaque
 /// evidence blob, which the server submits to
 /// <see cref="RootHeraldClient.VerifyAsync"/> using <see cref="Nonce"/>.
@@ -25,43 +24,92 @@ namespace RootHerald.AspNetCore;
 /// <param name="ExpiresAt">ISO 8601 timestamp after which the challenge is no longer valid.</param>
 public sealed record RootHeraldChallenge(string Nonce, string Challenge, string ExpiresAt);
 
-/// <summary>What a challenge asks the device to produce.</summary>
+/// <summary>
+/// A key challenge minted by <see cref="RootHeraldClient.IssueKeyChallengeAsync"/>.
+/// Relay <see cref="KeyChallenge"/> to the client verbatim; its <c>MintKey</c>
+/// reads the nonce and the purpose from it, creates the key and has the
+/// installation's attestation key certify it, and returns a certification,
+/// which the server submits to <see cref="RootHeraldClient.CertifyKeyAsync"/>
+/// using <see cref="Nonce"/>.
+/// </summary>
+/// <param name="Nonce">The backend's handle for this key challenge, as <see cref="RootHeraldChallenge.Nonce"/>.</param>
+/// <param name="KeyChallenge">
+/// The string to relay to the client: <c>rhk1c.&lt;base64url nonce&gt;.&lt;base64url purpose-json&gt;</c>.
+/// </param>
+/// <param name="ExpiresAt">ISO 8601 timestamp after which the key challenge is no longer valid.</param>
+public sealed record RootHeraldKeyChallenge(string Nonce, string KeyChallenge, string ExpiresAt);
+
+/// <summary>
+/// What a challenge asks the device to prove. Keys are never asked for here;
+/// they have their own ceremony (<see cref="RootHeraldClient.IssueKeyChallengeAsync"/>),
+/// and a <c>"key"</c> ask is refused with <see cref="InvalidAskException"/>.
+/// </summary>
 public static class Ask
 {
-    /// <summary>Proof the evidence comes from the enrolled TPM.</summary>
+    /// <summary>This is a specific, enrolled installation: a quote under its attestation key.</summary>
     public const string Identity = "identity";
 
-    /// <summary>The measured-boot event log alongside the quote.</summary>
+    /// <summary>The boot configuration: the measured-boot event log alongside the quote.</summary>
     public const string Posture = "posture";
-
-    /// <summary>
-    /// A TPM-resident signing key, created for this challenge and certified by
-    /// the device's attestation key. The verdict then carries its public half as
-    /// <see cref="AttestResult.Key"/>.
-    /// </summary>
-    public const string Key = "key";
 }
 
 /// <summary>
-/// Options for <see cref="RootHeraldClient.IssueChallengeAsync(ChallengeOptions?, CancellationToken)"/>.
+/// What a minted key is for. One live key per installation per purpose;
+/// minting again rotates it under the same <c>keyId</c>.
+/// </summary>
+public static class KeyPurpose
+{
+    /// <summary>A signing key: ES256 or RS256, checked with <see cref="RootHeraldClient.VerifyKeySignature"/>.</summary>
+    public const string Sign = "sign";
+
+    /// <summary>A decryption key: ECDH-ES or RSA-OAEP-256. The server refuses the purpose before wire 8.1.</summary>
+    public const string Decrypt = "decrypt";
+
+    internal static readonly string[] All = [Sign, Decrypt];
+}
+
+/// <summary>
+/// Options for <see cref="RootHeraldClient.IssueChallengeAsync"/>.
 /// The default asks for identity and posture.
 /// </summary>
 public sealed record ChallengeOptions
 {
     /// <summary>
-    /// What the device must produce, from the <see cref="Ask"/> constants. Null
+    /// What the device must prove, from the <see cref="Ask"/> constants. Null
     /// or empty means identity + posture.
     /// </summary>
     public IReadOnlyList<string>? Ask { get; init; }
 
     /// <summary>
-    /// What a certified key will be used for. Read only when <see cref="Ask"/>
-    /// contains <see cref="AspNetCore.Ask.Key"/>; <c>"sign"</c> is the only purpose today.
+    /// The <c>KeyId</c> of a key you certified. Only the installation holding
+    /// that key can pass; any other answers a failing verdict with reason
+    /// <c>expected_device_mismatch</c>. An unknown id is <c>422 expected_unknown</c>.
+    /// Pass the same value to <see cref="AttestOptions.ExpectedKey"/>.
     /// </summary>
-    public string? KeyPurpose { get; init; }
+    public string? ExpectedKey { get; init; }
 
-    /// <summary>Optional advisory hint identifying the device.</summary>
-    public string? DeviceHint { get; init; }
+    /// <summary>
+    /// Aliases (<see cref="AttestResult.DeviceId"/>) you enrolled. Only one of
+    /// them can pass; any other device answers a failing verdict with reason
+    /// <c>expected_device_mismatch</c>. An unknown alias is <c>422 expected_unknown</c>.
+    /// Pass the same list to <see cref="AttestOptions.ExpectedDevices"/>.
+    /// </summary>
+    public IReadOnlyList<string>? ExpectedDevices { get; init; }
+}
+
+/// <summary>Options for <see cref="RootHeraldClient.IssueKeyChallengeAsync"/>.</summary>
+public sealed record KeyChallengeOptions
+{
+    /// <summary>What the key is for, from the <see cref="KeyPurpose"/> constants. Required.</summary>
+    public required string Purpose { get; init; }
+
+    /// <summary>
+    /// Aliases (<see cref="AttestResult.DeviceId"/>) you enrolled. The certify
+    /// leg is refused unless one of them certified the key. Pass the alias of
+    /// the device that just passed an attest challenge, so the key provably
+    /// comes from it.
+    /// </summary>
+    public IReadOnlyList<string>? ExpectedDevices { get; init; }
 }
 
 /// <summary>
@@ -79,32 +127,70 @@ public sealed record AttestOptions
     /// Optional requested disclosure class for the returned device claim —
     /// <c>"verdict"</c>, <c>"pseudonymous"</c>, <c>"derived"</c>, or
     /// <c>"full"</c>. Sent on the wire as <c>requestedDisclosureClass</c>;
-    /// omitted from the request when null.
+    /// omitted from the request when null, and the API key's ceiling
+    /// (default <c>pseudonymous</c>) applies.
     /// </summary>
     public string? RequestedDisclosureClass { get; init; }
+
+    /// <summary>
+    /// The <see cref="ChallengeOptions.ExpectedKey"/> the challenge was issued
+    /// with. The verdict must echo it under <c>expected.key</c>; a response
+    /// that does not is <see cref="ExpectedNotEnforcedException"/>.
+    /// </summary>
+    public string? ExpectedKey { get; init; }
+
+    /// <summary>
+    /// The <see cref="ChallengeOptions.ExpectedDevices"/> the challenge was
+    /// issued with. The verdict must echo them under <c>expected.devices</c>,
+    /// and a non-failing verdict must name one of them; a response that does
+    /// not is <see cref="ExpectedNotEnforcedException"/>.
+    /// </summary>
+    public IReadOnlyList<string>? ExpectedDevices { get; init; }
 }
 
 /// <summary>
-/// A TPM-resident signing key the appraisal certified, returned when the
-/// challenge asked for <see cref="Ask.Key"/> and the verdict passed. Store
-/// <see cref="Jwk"/> against the user; a later request the device signed is
-/// checked locally with <see cref="RootHeraldClient.VerifyKeySignature"/>, with
-/// no call to Root Herald.
+/// What the challenge bound the verdict to, echoed by the server after it
+/// enforced it (<c>verdict.expected</c>). Null when the challenge named nothing.
+/// </summary>
+/// <param name="Key">The <c>expectedKey</c> the challenge named.</param>
+/// <param name="Devices">The <c>expectedDevices</c> the challenge named.</param>
+public sealed record ExpectedBinding(string? Key, IReadOnlyList<string>? Devices);
+
+/// <summary>
+/// The key Root Herald registered, returned by
+/// <see cref="RootHeraldClient.CertifyKeyAsync"/>. Store <see cref="KeyId"/>
+/// and <see cref="Jwk"/> against <see cref="DeviceId"/>; a later request the
+/// device signed is checked locally with
+/// <see cref="RootHeraldClient.VerifyKeySignature"/>, with no call to Root Herald.
 /// <para>
-/// <see cref="KeyId"/> identifies the key, not the device, and a fresh key is
-/// certified per ask.
+/// <see cref="KeyId"/> identifies an installation's credential, never a
+/// device: bind accounts to <see cref="DeviceId"/>. Minting again for the same
+/// purpose rotates the key under the same <see cref="KeyId"/>; a re-enrolled
+/// installation gets new key ids.
 /// </para>
 /// </summary>
-/// <param name="KeyId">Root Herald's id for this key, stable for the key's lifetime.</param>
-/// <param name="Jwk">The public key as a JWK: <c>{ kty: "EC", crv: "P-256" | "P-384", x, y }</c>.</param>
-/// <param name="Purpose">What the key is certified for; echoes the challenge's <c>keyPurpose</c>.</param>
-/// <param name="AuthPolicy">Hex <c>authPolicy</c> digest from the key's public area, when it has one.</param>
+/// <param name="DeviceId">This tenant's alias for the device that holds the key; never relayed to the device.</param>
+/// <param name="KeyId">Root Herald's id for this key, stable across rotations of the same purpose.</param>
+/// <param name="Purpose"><see cref="KeyPurpose.Sign"/> or <see cref="KeyPurpose.Decrypt"/>.</param>
+/// <param name="Alg"><c>ES256</c> / <c>RS256</c> for a sign key; <c>ECDH-ES</c> / <c>RSA-OAEP-256</c> for a decrypt key.</param>
+/// <param name="Format">Decrypt keys only: <c>jwe</c> on TPM platforms, <c>apple-ecies</c> on macOS.</param>
+/// <param name="Jwk">
+/// The public key as a JWK: <c>{ kty: "EC", crv: "P-256", x, y }</c> or
+/// <c>{ kty: "RSA", n, e }</c>, chosen by the device from what its TPM supports.
+/// </param>
+/// <param name="HardwareBound">
+/// True when the key lives in a TPM and was certified by the installation's
+/// attestation key; false on macOS, where the certification proves possession only.
+/// </param>
 /// <param name="CertifiedAt">When the certification was appraised.</param>
 public sealed record CertifiedKey(
+    string DeviceId,
     string KeyId,
-    JsonObject Jwk,
     string Purpose,
-    string? AuthPolicy,
+    string Alg,
+    string? Format,
+    JsonObject Jwk,
+    bool HardwareBound,
     DateTimeOffset CertifiedAt);
 
 /// <summary>
@@ -122,17 +208,28 @@ public sealed record AttestResult
     public required string Verdict { get; init; }
 
     /// <summary>
-    /// The full verdict object returned by the server, passed through verbatim.
+    /// The full verdict object returned by the server, passed through verbatim:
+    /// <c>acr</c>, <c>amr</c>, <c>authTime</c>, <c>expiresAt</c>, <c>userId</c>,
+    /// <c>requestedAcrValues</c>, <c>expected</c> and <c>device</c>.
     /// <para>
-    /// In addition to the per-device appraisal under <c>device</c>, when a
-    /// quote-bound event log was supplied the server populates ADDITIVE,
-    /// advisory-only cohort fields on <c>device</c> (camelCase on the wire;
-    /// absent/null otherwise) — never a trust gate:
-    /// <c>cohortKey</c> (string), <c>cohortScope</c> ("global"|"tenant-fleet"),
-    /// <c>cohortPrevalence</c> (number|null),
-    /// <c>cohortPrevalencePerPcr</c> (object), <c>cohortSampleSize</c> (number|null),
-    /// <c>novelProfile</c> (bool|null). Because the verdict is exposed as a raw
-    /// <see cref="JsonNode"/>, these flow through with no type change.
+    /// Under <c>device</c> (camelCase on the wire; a field gated by disclosure
+    /// class is absent below it): <c>ueid</c>, <c>disclosureClass</c>,
+    /// <c>earStatus</c>, <c>verdict</c>, <c>attestationType</c>,
+    /// <c>attestedAt</c>, <c>quoteVerified</c>, <c>secureBootVerified</c>,
+    /// <c>eventLogVerified</c>, <c>postureEvaluated</c>,
+    /// <c>postureSkippedReason</c>, <c>platform</c>, <c>hardwareModel</c>,
+    /// <c>tpmKind</c>, <c>chipAnchorId</c>, <c>identityAnchor</c>,
+    /// <c>trustworthinessVector</c>, <c>hardwareGenuine</c>,
+    /// <c>ekChainTrusted</c>, <c>sybilRisk</c>, <c>sybilResistance</c>,
+    /// <c>returningDevice</c>, <c>identityAgeBucket</c>,
+    /// <c>accountBindingBand</c>, <c>identityFirstSeen</c>,
+    /// <c>attestationCount</c>, <c>accountBindingCount</c>,
+    /// <c>possiblyRotated</c>, <c>identitiesOnAnchor</c>,
+    /// <c>platformRotated</c>, <c>platformRotationsInWindow</c>,
+    /// <c>bootChanged</c>, <c>bootChangedStages</c>, <c>bootChangeAccepted</c>,
+    /// <c>bootBaselineAt</c>, and the advisory cohort fields <c>cohortKey</c>,
+    /// <c>cohortScope</c>, <c>cohortPrevalence</c>, <c>cohortPrevalencePerPcr</c>,
+    /// <c>cohortSampleSize</c>, <c>novelProfile</c>.
     /// </para>
     /// </summary>
     public required JsonNode VerdictData { get; init; }
@@ -147,25 +244,25 @@ public sealed record AttestResult
     /// <summary>
     /// The attest-first / enroll-on-miss signal, from the top-level
     /// <c>enrollmentRequired</c> sibling of <c>verdict</c>. <c>true</c> when the
-    /// device must (re-)enroll before it can be appraised.
+    /// quote did not resolve to a live installation of this tenant: the
+    /// device must enroll, and the verdict is not to be trusted.
     /// </summary>
     public bool EnrollmentRequired { get; init; }
 
     /// <summary>
-    /// The signing key the appraisal certified, from the top-level <c>key</c>
-    /// sibling of <c>verdict</c>, passed through as the server sent it. The
-    /// server sends one only when the challenge asked for <see cref="Ask.Key"/>
-    /// and the verdict passed; null otherwise.
+    /// The binding the challenge named, echoed by the server after it enforced
+    /// it (<c>verdict.expected</c>). Null when the server sent none.
     /// </summary>
-    public CertifiedKey? Key { get; init; }
+    public ExpectedBinding? Expected { get; init; }
 
     /// <summary>True when the verdict is <see cref="RootHerald.AspNetCore.Verdict.Pass"/>.</summary>
     public bool IsPass => Verdict == RootHerald.AspNetCore.Verdict.Pass;
 
     /// <summary>
-    /// The device identifier, <c>verdict.device.ueid</c>. Null when the
-    /// disclosure class withheld it; fail closed on null if you key a decision
-    /// on it.
+    /// The device's alias, <c>verdict.device.ueid</c>: the same value
+    /// <see cref="RelayActivateResponse.DeviceId"/> and
+    /// <see cref="CertifiedKey.DeviceId"/> carry. Null when the disclosure
+    /// class withheld it; fail closed on null if you key a decision on it.
     /// </summary>
     public string? DeviceId => VerdictData["device"]?["ueid"]?.GetValue<string>();
 }
@@ -188,11 +285,14 @@ public static class Verdict
 /// <summary>
 /// Server → server Background-Check client.
 /// <para>
-/// The customer's dumb client collects an opaque evidence blob (no keys, no
-/// Root Herald contact) and hands it to the customer's own server. The server
-/// uses this client, authenticated with its <c>rh_sk_</c> secret key, to mint a
-/// challenge (<see cref="IssueChallengeAsync(ChallengeOptions?, CancellationToken)"/>)
-/// and submit the evidence for appraisal (<see cref="VerifyAsync"/>).
+/// The customer's client does local TPM work and hands the customer's own
+/// server opaque blobs (no keys, no Root Herald contact). The server uses this
+/// client, authenticated with its <c>rh_sk_</c> secret key, to drive three
+/// ceremonies of two legs each: enroll
+/// (<see cref="RelayEnrollAsync(EnrollRequestBlob, CancellationToken)"/> /
+/// <see cref="RelayActivateAsync"/>), mint a key
+/// (<see cref="IssueKeyChallengeAsync"/> / <see cref="CertifyKeyAsync"/>) and
+/// attest (<see cref="IssueChallengeAsync"/> / <see cref="VerifyAsync"/>).
 /// </para>
 /// Pure managed C# over <see cref="HttpClient"/>; no native dependencies.
 /// </summary>
@@ -214,10 +314,18 @@ public sealed class RootHeraldClient
     private const string CodeActivationRefused = "activation_refused";
     private const string CodeAdmissionRefused = "admission_refused";
     private const string CodeUnknownPolicy = "unknown_policy";
-    private const string CodeQuotaExceeded = "quota_exceeded";
+    private const string CodeKeyRotationConflict = "key_rotation_conflict";
+    private const string CodeInvalidAsk = "invalid_ask";
+    private const string CodeBudgetExhausted = "budget_exhausted";
 
-    // Marks a 429 as the metered quota, whatever the body says.
+    // Marks a 429 as the budget, whatever the body says.
     private const string QuotaHeader = "X-RootHerald-Quota";
+
+    private const int MinRsaModulusBytes = 256;
+
+    private static readonly string[] EcAlgs = ["ES256", "ECDH-ES"];
+    private static readonly string[] RsaAlgs = ["RS256", "RSA-OAEP-256"];
+    private static readonly string[] KeyFormats = ["jwe", "apple-ecies"];
 
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
@@ -250,9 +358,9 @@ public sealed class RootHeraldClient
         if (!Uri.TryCreate(resolvedBase, UriKind.Absolute, out var baseUri)
             || baseUri.Scheme != Uri.UriSchemeHttps)
         {
-            // MED-19: no SDK checked this. A typo'd or http:// base URL sends the
-            // full-privilege rh_sk_ secret in cleartext. Localhost is exempt so the
-            // local docker stack still works.
+            // A typo'd or http:// base URL would send the full-privilege rh_sk_
+            // secret in cleartext. Loopback is exempt so the local docker stack
+            // still works.
             if (baseUri is null || !baseUri.IsLoopback)
                 throw new ArgumentException(
                     $"baseUrl must be an absolute https URL (got '{resolvedBase}').",
@@ -264,31 +372,10 @@ public sealed class RootHeraldClient
         _baseUri = baseUri!;
         _secretKey = secretKey;
 
-        // MED-20: auth is attached PER REQUEST, not onto the client.
-        //
-        // This used to set _http.DefaultRequestHeaders["Authorization"] and
-        // _http.BaseAddress on a caller-supplied HttpClient. With
-        // IHttpClientFactory or a typed/singleton client — the documented way to
-        // inject one — that client is shared, so the rh_sk_ secret was attached to
-        // EVERY request it made, including to third-party hosts. The `??=` on
-        // BaseAddress had the same shape of bug: an injected client's existing
-        // BaseAddress silently won, sending the key and the evidence somewhere else
-        // entirely. Mutating an object you do not own is the defect; scoping the
-        // header to our own requests fixes both.
+        // Auth is attached per request, never onto the client: an injected
+        // HttpClient is shared with the caller's other hosts, and its own
+        // BaseAddress must not redirect the secret and the evidence elsewhere.
     }
-
-    /// <summary>
-    /// <c>POST /api/v1/attest/challenge</c> — mint a challenge asking for
-    /// identity and posture. Relay <see cref="RootHeraldChallenge.Challenge"/>
-    /// to the client; it quotes over the nonce inside it, then submit the
-    /// resulting evidence with <see cref="VerifyAsync"/> using
-    /// <see cref="RootHeraldChallenge.Nonce"/>.
-    /// </summary>
-    /// <param name="deviceHint">Optional advisory hint identifying the device.</param>
-    /// <param name="cancellationToken">Cancels the HTTP request.</param>
-    public Task<RootHeraldChallenge> IssueChallengeAsync(
-        string? deviceHint = null, CancellationToken cancellationToken = default)
-        => IssueChallengeAsync(new ChallengeOptions { DeviceHint = deviceHint }, cancellationToken);
 
     /// <summary>
     /// <c>POST /api/v1/attest/challenge</c> — mint a challenge carrying the
@@ -303,16 +390,18 @@ public sealed class RootHeraldClient
     /// 400 <c>policy_bound_to_key</c>.
     /// </para>
     /// </summary>
-    /// <param name="options">The ask, key purpose and device hint. Null asks for identity + posture.</param>
+    /// <param name="options">The ask and the expected key or devices. Null asks for identity + posture.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<RootHeraldChallenge> IssueChallengeAsync(
-        ChallengeOptions? options, CancellationToken cancellationToken = default)
+        ChallengeOptions? options = null, CancellationToken cancellationToken = default)
     {
         var body = new JsonObject();
-        if (options?.DeviceHint is { } hint) body["deviceHint"] = hint;
         if (options?.Ask is { Count: > 0 } ask)
-            body["ask"] = new JsonArray(ask.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray());
-        if (options?.KeyPurpose is { } purpose) body["keyPurpose"] = purpose;
+            body["ask"] = ToJsonArray(ask);
+        if (options?.ExpectedKey is { } expectedKey)
+            body["expectedKey"] = RequireNonEmpty(expectedKey, "ExpectedKey", nameof(options));
+        if (options?.ExpectedDevices is { } expectedDevices)
+            body["expectedDevices"] = ToJsonArray(RequireAliasList(expectedDevices, "ExpectedDevices", nameof(options)));
 
         var data = await PostAsync("api/v1/attest/challenge", body, cancellationToken)
             .ConfigureAwait(false);
@@ -330,15 +419,22 @@ public sealed class RootHeraldClient
     /// <para>
     /// An un-enrolled / failing device is NOT an error — it returns a normal
     /// <see cref="AttestResult"/> carrying a <c>"fail"</c>/<c>"warn"</c>
-    /// verdict. Only protocol/auth/quota problems raise a
+    /// verdict. Only protocol/auth/budget problems raise a
     /// <see cref="RootHeraldApiException"/>.
+    /// </para>
+    /// <para>
+    /// When the challenge named <see cref="ChallengeOptions.ExpectedKey"/> or
+    /// <see cref="ChallengeOptions.ExpectedDevices"/>, pass the same values in
+    /// <paramref name="options"/>: the verdict must echo them under
+    /// <c>expected</c>, and a response that does not is refused with
+    /// <see cref="ExpectedNotEnforcedException"/>.
     /// </para>
     /// </summary>
     /// <param name="evidence">
     /// Opaque blob from the client collector, as a <see cref="JsonNode"/>; passed
     /// through verbatim.
     /// </param>
-    /// <param name="options">Attest options carrying the challenge nonce and optional disclosure class.</param>
+    /// <param name="options">The challenge nonce, an optional disclosure class, and the binding the challenge named.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
     public async Task<AttestResult> VerifyAsync(
         JsonNode evidence, AttestOptions options, CancellationToken cancellationToken = default)
@@ -347,6 +443,8 @@ public sealed class RootHeraldClient
         ArgumentNullException.ThrowIfNull(options);
         if (string.IsNullOrEmpty(options.Nonce))
             throw new ArgumentException("AttestOptions.Nonce is required (from IssueChallengeAsync)", nameof(options));
+        var expectedKey = options.ExpectedKey is { } k ? RequireNonEmpty(k, "ExpectedKey", nameof(options)) : null;
+        var expectedDevices = options.ExpectedDevices is { } d ? RequireAliasList(d, "ExpectedDevices", nameof(options)) : null;
 
         var body = new JsonObject
         {
@@ -367,14 +465,93 @@ public sealed class RootHeraldClient
         // attestationType, quoteVerified, …) live under verdict.device.
         var verdict = ParseVerdict(verdictNode["device"]?["verdict"]);
 
-        return new AttestResult
+        var result = new AttestResult
         {
             Verdict = verdict,
             VerdictData = verdictNode,
             AssuranceClaimsMet = ReadStringArray(data["assuranceClaimsMet"]),
             EnrollmentRequired = data["enrollmentRequired"]?.GetValue<bool>() ?? false,
-            Key = ReadCertifiedKey(data["key"]),
+            Expected = ReadExpected(verdictNode["expected"]),
         };
+
+        if (expectedKey is not null || expectedDevices is not null)
+            RequireExpectedEnforced(result, expectedKey, expectedDevices);
+        return result;
+    }
+
+    /// <summary>
+    /// <c>POST /api/v1/keys/challenge</c> — mint a single-use key challenge
+    /// for a purpose. Relay <see cref="RootHeraldKeyChallenge.KeyChallenge"/>
+    /// to the client verbatim; its <c>MintKey</c> answers with a
+    /// certification, which the server submits with
+    /// <see cref="CertifyKeyAsync"/> using <see cref="RootHeraldKeyChallenge.Nonce"/>.
+    /// <para>
+    /// Refused with 422 <c>key_disclosure_too_low</c> when the API key's
+    /// disclosure ceiling is below <c>pseudonymous</c>: a key whose id could
+    /// never be returned is never minted.
+    /// </para>
+    /// </summary>
+    /// <param name="options">The purpose and, optionally, the devices allowed to certify.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
+    public async Task<RootHeraldKeyChallenge> IssueKeyChallengeAsync(
+        KeyChallengeOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (Array.IndexOf(KeyPurpose.All, options.Purpose) < 0)
+            throw new ArgumentException(
+                $"KeyChallengeOptions.Purpose must be one of {string.Join("/", KeyPurpose.All)}", nameof(options));
+
+        var body = new JsonObject { ["purpose"] = options.Purpose };
+        if (options.ExpectedDevices is { } expectedDevices)
+            body["expectedDevices"] = ToJsonArray(RequireAliasList(expectedDevices, "ExpectedDevices", nameof(options)));
+
+        var data = await PostAsync("api/v1/keys/challenge", body, cancellationToken)
+            .ConfigureAwait(false);
+        var nonce = data["nonce"]?.GetValue<string>();
+        var keyChallenge = data["keyChallenge"]?.GetValue<string>();
+        var expiresAt = data["expiresAt"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(nonce) || string.IsNullOrEmpty(keyChallenge) || string.IsNullOrEmpty(expiresAt))
+            throw new RootHeraldApiException(200, "key challenge response missing nonce/keyChallenge/expiresAt");
+        return new RootHeraldKeyChallenge(nonce, keyChallenge, expiresAt);
+    }
+
+    /// <summary>
+    /// <c>POST /api/v1/keys/certify</c> — relay the client's <c>MintKey</c>
+    /// output under the key challenge's nonce and return the key Root Herald
+    /// registered: its <see cref="CertifiedKey.KeyId"/>, public
+    /// <see cref="CertifiedKey.Jwk"/>, <see cref="CertifiedKey.Alg"/>, and the
+    /// <see cref="CertifiedKey.DeviceId"/> of the installation that certified
+    /// it. Later signatures are checked locally with <see cref="VerifyKeySignature"/>.
+    /// <para>
+    /// The certification is relayed verbatim, whichever platform shape it is:
+    /// <c>{ publicArea, attest, signature }</c> from a TPM, or a
+    /// <c>platform</c>-tagged body from macOS or iOS. The key is the call's
+    /// only output, so a malformed one is refused with
+    /// <see cref="RootHeraldApiException"/> rather than returned half-parsed.
+    /// </para>
+    /// </summary>
+    /// <param name="nonce">The key challenge handle from <see cref="RootHeraldKeyChallenge.Nonce"/>.</param>
+    /// <param name="certification">The client's <c>MintKey</c> output, as a <see cref="JsonNode"/>.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
+    public async Task<CertifiedKey> CertifyKeyAsync(
+        string nonce, JsonNode certification, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(nonce))
+            throw new ArgumentException("nonce is required (from IssueKeyChallengeAsync)", nameof(nonce));
+        ArgumentNullException.ThrowIfNull(certification);
+        if (certification is not JsonObject obj || !IsWellFormedCertification(obj))
+            throw new ArgumentException(
+                "certification must be the client's MintKey output: { publicArea, attest, signature } on a TPM, or the platform form from macOS / iOS",
+                nameof(certification));
+
+        var body = new JsonObject
+        {
+            ["nonce"] = nonce,
+            ["certification"] = certification.DeepClone(),
+        };
+        var data = await PostAsync("api/v1/keys/certify", body, cancellationToken)
+            .ConfigureAwait(false);
+        return ReadCertifiedKey(data);
     }
 
     /// <summary>
@@ -384,43 +561,56 @@ public sealed class RootHeraldClient
     /// <c>rh_sk_</c> secret and returns the
     /// <see cref="RelayEnrollResult.Challenge"/> to hand to the client's
     /// <c>EnrollComplete</c>, whose result goes to
-    /// <see cref="RelayActivateAsync"/>.
+    /// <see cref="RelayActivateAsync"/>. The body is relayed whole, including
+    /// fields this SDK does not model.
     /// </para>
     /// <para>
-    /// Admission runs under the identity policy bound to the API key, so a
-    /// device whose TPM class can never satisfy it is refused before it gets an
-    /// attestation key: <see cref="AdmissionRefusedException"/>, with the class
-    /// in the message.
-    /// </para>
-    /// <para>
-    /// The client never holds the <c>rh_sk_</c> key and never talks to Root
-    /// Herald; this backend helper is the only thing that does.
+    /// A TPM body must carry the nested <see cref="EnrollRequestBlob.AttestationKey"/>;
+    /// a flat one with <see cref="EnrollRequestBlob.AkPublicArea"/> is the 7.0
+    /// shape and is refused locally with <see cref="ArgumentException"/> before
+    /// any request. Admission runs under the identity policy bound to the API
+    /// key, so a device whose TPM class can never satisfy it is refused before
+    /// it gets an attestation key: <see cref="AdmissionRefusedException"/>, with
+    /// the class in the message.
     /// </para>
     /// </summary>
     /// <param name="enrollRequestBlob">The opaque enroll-begin blob from the client.</param>
     /// <param name="cancellationToken">Cancels the HTTP request.</param>
-    public async Task<RelayEnrollResult> RelayEnrollAsync(
+    public Task<RelayEnrollResult> RelayEnrollAsync(
         EnrollRequestBlob enrollRequestBlob, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(enrollRequestBlob);
-        var ios = string.Equals(enrollRequestBlob.Platform, "ios", StringComparison.Ordinal);
-        if (ios)
-        {
-            if (string.IsNullOrEmpty(enrollRequestBlob.IosKeyId) ||
-                string.IsNullOrEmpty(enrollRequestBlob.IosAttestationObject) ||
-                string.IsNullOrEmpty(enrollRequestBlob.Nonce))
-                throw new ArgumentException(
-                    "an ios enroll request blob requires iosKeyId, iosAttestationObject and nonce",
-                    nameof(enrollRequestBlob));
-        }
-        else if (string.IsNullOrEmpty(enrollRequestBlob.EkPublicKey) ||
-                 string.IsNullOrEmpty(enrollRequestBlob.AkPublicArea))
-        {
-            throw new ArgumentException(
-                "enroll request blob requires ekPublicKey and akPublicArea", nameof(enrollRequestBlob));
-        }
+        var node = JsonSerializer.SerializeToNode(enrollRequestBlob) as JsonObject
+            ?? throw new ArgumentException("enroll request blob did not serialize to an object", nameof(enrollRequestBlob));
+        return RelayEnrollCoreAsync(node, nameof(enrollRequestBlob), cancellationToken);
+    }
 
-        var data = await PostAsync("api/v1/attest/enroll", enrollRequestBlob, cancellationToken)
+    /// <summary>
+    /// Enroll relay — leg 1, from the client's body as JSON. The same as
+    /// <see cref="RelayEnrollAsync(EnrollRequestBlob, CancellationToken)"/>
+    /// with the body posted as-is after the shape check, for a backend that
+    /// receives the device's JSON and need not model it.
+    /// </summary>
+    /// <param name="enrollRequestBlob">The client's <c>EnrollBegin()</c> body.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request.</param>
+    public Task<RelayEnrollResult> RelayEnrollAsync(
+        JsonObject enrollRequestBlob, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(enrollRequestBlob);
+        return RelayEnrollCoreAsync(enrollRequestBlob, nameof(enrollRequestBlob), cancellationToken);
+    }
+
+    private async Task<RelayEnrollResult> RelayEnrollCoreAsync(
+        JsonObject blob, string paramName, CancellationToken cancellationToken)
+    {
+        var platform = ReadString(blob["platform"]);
+        var ios = platform == "ios";
+        if (!IsWellFormedEnrollBlob(blob, platform))
+            throw new ArgumentException(
+                "enroll request blob requires ekPublicKey with attestationKey { publicArea, parentPublicArea, qualifiedName } (windows/linux), ekPublicKey with akPublicArea (macos), or iosKeyId, iosAttestationObject and nonce (ios)",
+                paramName);
+
+        var data = await PostAsync("api/v1/attest/enroll", blob, cancellationToken)
             .ConfigureAwait(false);
         if (data is not JsonObject body)
             throw new RootHeraldApiException(201, "enroll response is not an object");
@@ -457,9 +647,8 @@ public sealed class RootHeraldClient
     /// Relays the client's <c>EnrollComplete()</c> blob (the decrypted credential
     /// secret, or the enclave signature on macOS) to Root Herald, completing
     /// the enrollment the <c>enrollmentId</c> names. Every TPM and macOS
-    /// <see cref="RelayEnrollAsync"/> leads here: enrollment always issues a
-    /// challenge, including for a known device, because re-enrollment is how a
-    /// device rotates its attestation key.
+    /// enroll leads here: each activation creates a new installation of the
+    /// device, with its own attestation key.
     /// </para>
     /// Returns the terminal <c>{ deviceId, status, enrolledAt }</c> body;
     /// <see cref="RelayActivateResponse.DeviceId"/> is the load-bearing field the
@@ -494,45 +683,30 @@ public sealed class RootHeraldClient
     /// <summary>
     /// Checks a signature made by a key Root Herald certified
     /// (<see cref="CertifiedKey.Jwk"/>) over <paramref name="message"/>, with
-    /// no call to Root Herald. The customer stores the JWK at attestation time
-    /// and checks each later request locally.
+    /// no call to Root Herald. The customer stores the JWK at certification
+    /// time and checks each later request locally.
     /// <para>
-    /// The signature is ECDSA over SHA-256(message) for P-256 and
-    /// SHA-384(message) for P-384, in either the raw <c>r||s</c> form (64 or 96
-    /// bytes, as a TPM emits) or ASN.1 DER. Returns false for anything it cannot
-    /// verify — an unsupported key, a point off the curve, or a malformed
-    /// signature — and never throws.
+    /// An EC P-256 key checks ES256: ECDSA over SHA-256(message), in either
+    /// the raw <c>r||s</c> form (64 bytes, as a TPM emits) or ASN.1 DER. An
+    /// RSA key checks RS256: PKCS#1 v1.5 over SHA-256, a modulus of at least
+    /// 2048 bits and a signature of exactly the modulus length. Returns false
+    /// for anything it cannot verify — an unsupported key, a point off the
+    /// curve, or a malformed signature — and never throws.
     /// </para>
+    /// A signature proves possession of the key at that moment, not how the
+    /// machine booted; run an attest challenge for that.
     /// </summary>
     public static bool VerifyKeySignature(JsonObject jwk, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
     {
-        if (jwk is null) return false;
+        if (jwk is null || signature.IsEmpty) return false;
         try
         {
-            if (jwk["kty"]?.GetValue<string>() != "EC") return false;
-            var (curve, hash, size) = jwk["crv"]?.GetValue<string>() switch
+            return ReadString(jwk["kty"]) switch
             {
-                "P-256" => (ECCurve.NamedCurves.nistP256, HashAlgorithmName.SHA256, 32),
-                "P-384" => (ECCurve.NamedCurves.nistP384, HashAlgorithmName.SHA384, 48),
-                _ => (default(ECCurve), default(HashAlgorithmName), 0),
+                "EC" => VerifyEs256(jwk, message, signature),
+                "RSA" => VerifyRs256(jwk, message, signature),
+                _ => false,
             };
-            if (size == 0) return false;
-
-            var x = DecodeCoordinate(jwk["x"]?.GetValue<string>(), size);
-            var y = DecodeCoordinate(jwk["y"]?.GetValue<string>(), size);
-            if (x is null || y is null) return false;
-
-            // ECDsa.Create validates the point is on the curve and throws otherwise.
-            using var ecdsa = ECDsa.Create(new ECParameters
-            {
-                Curve = curve,
-                Q = new ECPoint { X = x, Y = y },
-            });
-
-            if (signature.Length == 2 * size &&
-                ecdsa.VerifyData(message, signature, hash, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
-                return true;
-            return ecdsa.VerifyData(message, signature, hash, DSASignatureFormat.Rfc3279DerSequence);
         }
         catch (Exception)
         {
@@ -541,19 +715,52 @@ public sealed class RootHeraldClient
         }
     }
 
+    private static bool VerifyEs256(JsonObject jwk, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
+    {
+        if (ReadString(jwk["crv"]) != "P-256") return false;
+        var x = DecodeBase64Url(ReadString(jwk["x"]));
+        var y = DecodeBase64Url(ReadString(jwk["y"]));
+        if (x is not { Length: 32 } || y is not { Length: 32 }) return false;
+
+        // ECDsa.Create validates the point is on the curve and throws otherwise.
+        using var ecdsa = ECDsa.Create(new ECParameters
+        {
+            Curve = ECCurve.NamedCurves.nistP256,
+            Q = new ECPoint { X = x, Y = y },
+        });
+
+        var format = signature.Length == 64
+            ? DSASignatureFormat.IeeeP1363FixedFieldConcatenation
+            : DSASignatureFormat.Rfc3279DerSequence;
+        return ecdsa.VerifyData(message, signature, HashAlgorithmName.SHA256, format);
+    }
+
+    private static bool VerifyRs256(JsonObject jwk, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
+    {
+        var n = DecodeBase64Url(ReadString(jwk["n"]));
+        var e = DecodeBase64Url(ReadString(jwk["e"]));
+        if (n is null || e is null || e.Length == 0) return false;
+        // JWK integers are unsigned big-endian with no leading zero; the
+        // modulus length in bytes is the signature length PKCS#1 demands.
+        if (n.Length < MinRsaModulusBytes || n[0] == 0 || signature.Length != n.Length) return false;
+
+        using var rsa = RSA.Create();
+        rsa.ImportParameters(new RSAParameters { Modulus = n, Exponent = e });
+        return rsa.VerifyData(message, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+    }
+
     /// <summary>
-    /// Decodes one base64url JWK coordinate of exactly <paramref name="size"/>
-    /// bytes. JWK coordinates are unpadded, but padding is tolerated.
+    /// Decodes one base64url JWK field. JWK fields are unpadded, but padding
+    /// and the standard alphabet are tolerated.
     /// </summary>
-    private static byte[]? DecodeCoordinate(string? value, int size)
+    private static byte[]? DecodeBase64Url(string? value)
     {
         if (string.IsNullOrEmpty(value)) return null;
         var s = value.TrimEnd('=').Replace('-', '+').Replace('_', '/');
         s = s.PadRight(s.Length + (4 - s.Length % 4) % 4, '=');
         try
         {
-            var bytes = Convert.FromBase64String(s);
-            return bytes.Length == size ? bytes : null;
+            return Convert.FromBase64String(s);
         }
         catch (FormatException)
         {
@@ -562,34 +769,144 @@ public sealed class RootHeraldClient
     }
 
     /// <summary>
-    /// Reads the top-level <c>key</c> of a verify response. Absent is null; a
-    /// key without its load-bearing fields is a malformed response, not a null
-    /// the caller might misread as "no key asked".
+    /// The 8.0 TPM body nests the AK; macOS stays flat; iOS is its own shape.
+    /// A flat TPM body is the 7.0 shape and is refused here rather than
+    /// relayed: the server would answer <c>wire_version_unsupported</c>
+    /// anyway, and refusing locally keeps the message specific.
     /// </summary>
-    private static CertifiedKey? ReadCertifiedKey(JsonNode? node)
+    private static bool IsWellFormedEnrollBlob(JsonObject blob, string? platform)
     {
-        if (node is null) return null;
-        if (node is not JsonObject obj)
-            throw new RootHeraldApiException(200, "verify response key is not an object");
-
-        var keyId = obj["keyId"]?.GetValue<string>();
-        var jwk = obj["jwk"] as JsonObject;
-        var purpose = obj["purpose"]?.GetValue<string>();
-        var certifiedAtRaw = obj["certifiedAt"]?.GetValue<string>();
-        if (string.IsNullOrEmpty(keyId) || jwk is null ||
-            string.IsNullOrEmpty(jwk["kty"]?.GetValue<string>()) ||
-            string.IsNullOrEmpty(jwk["x"]?.GetValue<string>()) ||
-            string.IsNullOrEmpty(jwk["y"]?.GetValue<string>()) ||
-            !DateTimeOffset.TryParse(certifiedAtRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var certifiedAt))
-            throw new RootHeraldApiException(200, "verify response key missing keyId/jwk/certifiedAt");
-
-        return new CertifiedKey(
-            keyId,
-            (JsonObject)jwk.DeepClone(),
-            purpose ?? "sign",
-            obj["authPolicy"]?.GetValue<string>(),
-            certifiedAt);
+        switch (platform)
+        {
+            case "ios":
+                return HasString(blob, "iosKeyId") && HasString(blob, "iosAttestationObject") && HasString(blob, "nonce");
+            case "macos":
+                return HasString(blob, "ekPublicKey") && HasString(blob, "akPublicArea") && !blob.ContainsKey("attestationKey");
+            case "windows":
+            case "linux":
+                return HasString(blob, "ekPublicKey")
+                    && blob["attestationKey"] is JsonObject ak
+                    && HasString(ak, "publicArea") && HasString(ak, "parentPublicArea") && HasString(ak, "qualifiedName")
+                    && !blob.ContainsKey("akPublicArea");
+            default:
+                return false;
+        }
     }
+
+    /// <summary>
+    /// The certification is per platform and relayed verbatim, so only its
+    /// outer shape is checked: a TPM certification's three base64 strings, or
+    /// a platform-tagged body from macOS or iOS.
+    /// </summary>
+    private static bool IsWellFormedCertification(JsonObject certification)
+    {
+        if (HasString(certification, "platform")) return true;
+        return HasString(certification, "publicArea") && HasString(certification, "attest") && HasString(certification, "signature");
+    }
+
+    private static bool HasString(JsonObject obj, string key) => !string.IsNullOrEmpty(ReadString(obj[key]));
+
+    /// <summary>The node's string value, or null when it is absent or not a string.</summary>
+    private static string? ReadString(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var s) ? s : null;
+
+    /// <summary>
+    /// Reads a <c>/keys/certify</c> response. The JWK family must match
+    /// <c>alg</c>: an EC key signs ES256 or agrees ECDH-ES, an RSA key signs
+    /// RS256 or wraps RSA-OAEP-256. Anything else is refused rather than
+    /// surfaced half-parsed: a caller that then called
+    /// <see cref="VerifyKeySignature"/> with it would silently get false.
+    /// </summary>
+    private static CertifiedKey ReadCertifiedKey(JsonNode node)
+    {
+        static RootHeraldApiException Refuse(string why) => new(200, $"certify response {why}");
+
+        if (node is not JsonObject obj) throw Refuse("is not an object");
+        var deviceId = ReadString(obj["deviceId"]);
+        if (string.IsNullOrEmpty(deviceId)) throw Refuse("missing deviceId");
+        var keyId = ReadString(obj["keyId"]);
+        if (string.IsNullOrEmpty(keyId)) throw Refuse("missing keyId");
+        var purpose = ReadString(obj["purpose"]);
+        if (purpose is null || Array.IndexOf(KeyPurpose.All, purpose) < 0)
+            throw Refuse($"purpose is not one of {string.Join("/", KeyPurpose.All)}");
+        if (obj["hardwareBound"] is not JsonValue hb || !hb.TryGetValue<bool>(out var hardwareBound))
+            throw Refuse("missing hardwareBound");
+        if (!DateTimeOffset.TryParse(ReadString(obj["certifiedAt"]), null,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var certifiedAt))
+            throw Refuse("certifiedAt is not a timestamp");
+
+        var jwk = ReadJwk(obj["jwk"]) ?? throw Refuse("jwk is not an EC P-256 or RSA public key");
+        var kty = ReadString(jwk["kty"]);
+        var alg = ReadString(obj["alg"]);
+        var algs = kty == "EC" ? EcAlgs : RsaAlgs;
+        if (alg is null || Array.IndexOf(algs, alg) < 0)
+            throw Refuse($"alg '{alg}' does not fit a {kty} key");
+        var format = obj["format"] is null ? null : ReadString(obj["format"]);
+        if (obj["format"] is not null && (format is null || Array.IndexOf(KeyFormats, format) < 0))
+            throw Refuse($"format is not one of {string.Join("/", KeyFormats)}");
+
+        return new CertifiedKey(deviceId, keyId, purpose, alg, format, jwk, hardwareBound, certifiedAt);
+    }
+
+    private static JsonObject? ReadJwk(JsonNode? node)
+    {
+        if (node is not JsonObject obj) return null;
+        var kty = ReadString(obj["kty"]);
+        if (kty == "EC" && ReadString(obj["crv"]) == "P-256" && HasString(obj, "x") && HasString(obj, "y"))
+            return new JsonObject { ["kty"] = "EC", ["crv"] = "P-256", ["x"] = obj["x"]!.GetValue<string>(), ["y"] = obj["y"]!.GetValue<string>() };
+        if (kty == "RSA" && HasString(obj, "n") && HasString(obj, "e"))
+            return new JsonObject { ["kty"] = "RSA", ["n"] = obj["n"]!.GetValue<string>(), ["e"] = obj["e"]!.GetValue<string>() };
+        return null;
+    }
+
+    private static ExpectedBinding? ReadExpected(JsonNode? node)
+    {
+        if (node is not JsonObject obj) return null;
+        var key = ReadString(obj["key"]);
+        var devices = obj["devices"] is JsonArray ? ReadStringArray(obj["devices"]) : null;
+        return new ExpectedBinding(key, devices);
+    }
+
+    /// <summary>
+    /// A verdict is only as bound as the server says it enforced. The API
+    /// ignores unknown JSON fields, so a server that predates the binding
+    /// would accept any device and answer a verdict with no <c>expected</c>
+    /// block; comparing the echo with what was asked turns that silence into
+    /// a refusal.
+    /// </summary>
+    private static void RequireExpectedEnforced(AttestResult result, string? expectedKey, IReadOnlyList<string>? expectedDevices)
+    {
+        static ExpectedNotEnforcedException Refuse(string what) =>
+            new($"verify response did not echo the {what} the challenge named; the binding was not enforced");
+
+        if (expectedKey is not null && result.Expected?.Key != expectedKey)
+            throw Refuse("ExpectedKey");
+        if (expectedDevices is not null)
+        {
+            var echoed = result.Expected?.Devices;
+            if (echoed is null || !echoed.ToHashSet(StringComparer.Ordinal).SetEquals(expectedDevices))
+                throw Refuse("ExpectedDevices");
+            if (result.Verdict != RootHerald.AspNetCore.Verdict.Fail && result.DeviceId is { } ueid && !expectedDevices.Contains(ueid))
+                throw Refuse("ExpectedDevices");
+        }
+    }
+
+    private static string RequireNonEmpty(string value, string field, string paramName)
+    {
+        if (string.IsNullOrEmpty(value))
+            throw new ArgumentException($"{field} must be a non-empty string", paramName);
+        return value;
+    }
+
+    private static IReadOnlyList<string> RequireAliasList(IReadOnlyList<string> value, string field, string paramName)
+    {
+        if (value.Count == 0 || value.Any(string.IsNullOrEmpty))
+            throw new ArgumentException($"{field} must be a non-empty list of non-empty strings", paramName);
+        return value;
+    }
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values) =>
+        new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
 
     /// <summary>
     /// Issues an authenticated JSON POST and returns the parsed JSON body, mapping
@@ -628,15 +945,20 @@ public sealed class RootHeraldClient
         string? errorCode = null;
         string? message = null;
         int? retryAfterSeconds = null;
+        RefusingBudget? budget = null;
         try
         {
             var node = await response.Content.ReadFromJsonAsync<JsonNode>(cancellationToken).ConfigureAwait(false);
             if (node is JsonObject obj)
             {
                 errorCode = obj["error"]?.GetValue<string>();
-                message = obj["message"]?.GetValue<string>() ?? obj["error_description"]?.GetValue<string>();
+                message = obj["message"]?.GetValue<string>()
+                    ?? obj["detail"]?.GetValue<string>()
+                    ?? obj["error_description"]?.GetValue<string>();
                 if (obj["retryAfterSeconds"] is JsonValue retry && retry.TryGetValue<int>(out var seconds))
                     retryAfterSeconds = seconds;
+                if (obj["budget"] is JsonObject b && HasString(b, "id") && HasString(b, "name"))
+                    budget = new RefusingBudget(b["id"]!.GetValue<string>(), b["name"]!.GetValue<string>());
             }
         }
         catch (JsonException)
@@ -656,10 +978,13 @@ public sealed class RootHeraldClient
                 new AdmissionRefusedException(message ?? "enrollment refused for this device class", errorCode),
             HttpStatusCode.UnprocessableEntity when errorCode is null or CodeUnknownPolicy =>
                 new UnknownPolicyException(message ?? "unknown policy", errorCode),
-            HttpStatusCode.Conflict => new ChallengeException(message ?? "challenge invalid or expired", errorCode),
+            HttpStatusCode.Conflict when errorCode != CodeKeyRotationConflict =>
+                new ChallengeException(message ?? "challenge invalid or expired", errorCode),
+            HttpStatusCode.BadRequest when errorCode == CodeInvalidAsk =>
+                new InvalidAskException(message ?? "invalid ask", errorCode),
             HttpStatusCode.BadRequest => new InvalidEvidenceException(message ?? "invalid evidence", errorCode),
-            HttpStatusCode.TooManyRequests when errorCode == CodeQuotaExceeded || response.Headers.Contains(QuotaHeader) =>
-                new QuotaExceededException(message ?? "quota exceeded", errorCode),
+            HttpStatusCode.TooManyRequests when errorCode == CodeBudgetExhausted || response.Headers.Contains(QuotaHeader) =>
+                new QuotaExceededException(message ?? "budget exhausted", errorCode, budget),
             HttpStatusCode.TooManyRequests =>
                 new RateLimitedException(message ?? "rate limited", errorCode, retryAfterSeconds),
             _ => new RootHeraldApiException(status, message ?? $"Root Herald API error (HTTP {status})", errorCode),
@@ -688,8 +1013,8 @@ public sealed class RootHeraldClient
         var values = new List<string>(array.Count);
         foreach (var item in array)
         {
-            if (item?.GetValue<string>() is { } value)
-                values.Add(value);
+            if (item is JsonValue value && value.TryGetValue<string>(out var s))
+                values.Add(s);
         }
         return values;
     }
