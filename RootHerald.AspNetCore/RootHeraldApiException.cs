@@ -2,24 +2,29 @@ namespace RootHerald.AspNetCore;
 
 /// <summary>
 /// Thrown when the Root Herald API returns a non-2xx response during a
-/// Background-Check (server → server) call. Subclasses map specific HTTP
-/// statuses, mirroring the <c>@rootherald/node</c> taxonomy:
+/// Background-Check (server → server) call, or a 2xx body the SDK refuses.
+/// Subclasses map specific HTTP statuses, mirroring the
+/// <c>@rootherald/node</c> taxonomy:
 /// <list type="bullet">
 ///   <item><description>401 <c>activation_refused</c> → <see cref="ActivationRefusedException"/></description></item>
 ///   <item><description>401, any other code → <see cref="InvalidSecretKeyException"/></description></item>
 ///   <item><description>422 <c>unknown_policy</c> (or no code) → <see cref="UnknownPolicyException"/></description></item>
 ///   <item><description>422 <c>admission_refused</c> → <see cref="AdmissionRefusedException"/></description></item>
-///   <item><description>409 → <see cref="ChallengeException"/></description></item>
-///   <item><description>400 → <see cref="InvalidEvidenceException"/></description></item>
-///   <item><description>429 <c>quota_exceeded</c>, or an <c>X-RootHerald-Quota</c> header → <see cref="QuotaExceededException"/></description></item>
+///   <item><description>409 <c>key_rotation_conflict</c> → this base type</description></item>
+///   <item><description>409, any other → <see cref="ChallengeException"/></description></item>
+///   <item><description>400 <c>invalid_ask</c> → <see cref="InvalidAskException"/></description></item>
+///   <item><description>400, any other (including <c>wire_version_unsupported</c>, <c>invalid_enroll_shape</c>) → <see cref="InvalidEvidenceException"/></description></item>
+///   <item><description>429 <c>budget_exhausted</c>, or an <c>X-RootHerald-Quota</c> header → <see cref="QuotaExceededException"/></description></item>
 ///   <item><description>429, any other → <see cref="RateLimitedException"/></description></item>
+///   <item><description>200 whose verdict does not echo the binding the challenge named → <see cref="ExpectedNotEnforcedException"/></description></item>
 /// </list>
 /// Where one status carries two refusals the server's error code
 /// (<see cref="ErrorCode"/>) or a header tells them apart. A status or code no
-/// subclass covers — including 422 <c>posture_not_bound</c> and 402
+/// subclass covers — including 422 <c>posture_not_bound</c>,
+/// <c>expected_unknown</c> and <c>key_disclosure_too_low</c>, and 402
 /// <c>plan_lapsed</c> — is this base type with <see cref="ErrorCode"/> preserved.
 /// Note: an un-enrolled / failing device is NOT an error — it returns a normal
-/// verdict. Only protocol/auth/quota problems raise one of these.
+/// verdict. Only protocol/auth/budget problems raise one of these.
 /// </summary>
 public class RootHeraldApiException : Exception
 {
@@ -91,7 +96,12 @@ public sealed class AdmissionRefusedException : RootHeraldApiException
         : base(422, message, errorCode) { }
 }
 
-/// <summary>The challenge is unknown, expired, or already consumed (HTTP 409).</summary>
+/// <summary>
+/// The challenge is unknown, expired, or already consumed (HTTP 409). A 409
+/// carrying <c>key_rotation_conflict</c> is a plain
+/// <see cref="RootHeraldApiException"/> instead: the key challenge was fine,
+/// the rotation it asked for collided with another.
+/// </summary>
 public sealed class ChallengeException : RootHeraldApiException
 {
     /// <summary>Create the exception.</summary>
@@ -100,8 +110,12 @@ public sealed class ChallengeException : RootHeraldApiException
 }
 
 /// <summary>
-/// The submitted evidence blob was malformed or unparseable (HTTP 400). An
-/// un-enrolled / failing device is NOT this exception — that returns a verdict.
+/// The relayed blob was malformed or could not be appraised (HTTP 400). This
+/// includes <c>wire_version_unsupported</c> (a 7.0-shaped enroll body) and
+/// <c>invalid_enroll_shape</c> (an attestation key whose qualified name does
+/// not follow from its parent). An un-enrolled / failing device is NOT this
+/// exception — that returns a verdict. A 400 carrying <c>invalid_ask</c> is
+/// <see cref="InvalidAskException"/>.
 /// </summary>
 public sealed class InvalidEvidenceException : RootHeraldApiException
 {
@@ -111,21 +125,46 @@ public sealed class InvalidEvidenceException : RootHeraldApiException
 }
 
 /// <summary>
-/// The tenant has exceeded its metered verify quota (HTTP 429 with error code
-/// <c>quota_exceeded</c> or an <c>X-RootHerald-Quota</c> header). A 429
-/// without that signal is <see cref="RateLimitedException"/>.
+/// The challenge named an ask the server does not know, such as the retired
+/// <c>"key"</c> (HTTP 400, error code <c>invalid_ask</c>). The backend's code
+/// is wrong, not the device: keys are minted with
+/// <see cref="RootHeraldClient.IssueKeyChallengeAsync"/>.
+/// </summary>
+public sealed class InvalidAskException : RootHeraldApiException
+{
+    /// <summary>Create the exception.</summary>
+    public InvalidAskException(string message, string? errorCode = null)
+        : base(400, message, errorCode) { }
+}
+
+/// <summary>The budget that refused a device, as the server names it.</summary>
+/// <param name="Id">The budget's id.</param>
+/// <param name="Name">The budget's display name.</param>
+public sealed record RefusingBudget(string Id, string Name);
+
+/// <summary>
+/// The API key's budget cannot pay for a device new to the period (HTTP 429
+/// with error code <c>budget_exhausted</c> or an <c>X-RootHerald-Quota</c>
+/// header). <see cref="Budget"/> names it when the server did. A 429 without
+/// that signal is <see cref="RateLimitedException"/>.
 /// </summary>
 public sealed class QuotaExceededException : RootHeraldApiException
 {
+    /// <summary>The budget that refused, when the server named it.</summary>
+    public RefusingBudget? Budget { get; }
+
     /// <summary>Create the exception.</summary>
-    public QuotaExceededException(string message, string? errorCode = null)
-        : base(429, message, errorCode) { }
+    public QuotaExceededException(string message, string? errorCode = null, RefusingBudget? budget = null)
+        : base(429, message, errorCode)
+    {
+        Budget = budget;
+    }
 }
 
 /// <summary>
-/// The request-rate limiter refused the call (HTTP 429 without a quota
+/// The request-rate limiter refused the call (HTTP 429 without a budget
 /// signal). Retry after <see cref="RetryAfterSeconds"/>. Distinct from
-/// <see cref="QuotaExceededException"/>, the metered billing ceiling.
+/// <see cref="QuotaExceededException"/>, the budget ceiling.
 /// </summary>
 public sealed class RateLimitedException : RootHeraldApiException
 {
@@ -141,4 +180,19 @@ public sealed class RateLimitedException : RootHeraldApiException
     {
         RetryAfterSeconds = retryAfterSeconds;
     }
+}
+
+/// <summary>
+/// The verify response did not echo the <c>ExpectedKey</c> /
+/// <c>ExpectedDevices</c> the challenge named, so the binding was not
+/// enforced. The API ignores unknown JSON fields, so a server that predates
+/// the binding would accept any device and answer a verdict with no
+/// <c>expected</c> block; this refusal turns that silence into an error. Do
+/// not trust the verdict.
+/// </summary>
+public sealed class ExpectedNotEnforcedException : RootHeraldApiException
+{
+    /// <summary>Create the exception.</summary>
+    public ExpectedNotEnforcedException(string message)
+        : base(200, message) { }
 }
