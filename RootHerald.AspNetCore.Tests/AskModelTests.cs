@@ -111,6 +111,21 @@ public class AskModelTests
     }
 
     [Fact]
+    public async Task VerifyAsync_compares_aliases_case_insensitively()
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.OK, PassFor("dev_1", """{"devices":["dev_2","dev_1"]}"""));
+
+        var result = await client.VerifyAsync(new JsonObject(), new AttestOptions
+        {
+            Nonce = "bm9uY2U",
+            ExpectedDevices = new[] { " DEV_1 ", "Dev_2" },
+        });
+
+        Assert.True(result.IsPass);
+    }
+
+    [Fact]
     public async Task A_400_invalid_purpose_is_a_programming_error_not_invalid_evidence()
     {
         var (client, handler) = Make();
@@ -574,6 +589,21 @@ public class AskModelTests
         var signature = key.SignData(message, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 
         Assert.Equal(128, signature.Length);
+        Assert.False(RootHeraldClient.VerifyKeySignature(jwk, message, signature));
+    }
+
+    [Fact]
+    public void VerifyKeySignature_refuses_a_256_byte_modulus_whose_high_bit_is_clear()
+    {
+        using var key = RSA.Create(2048);
+        var jwk = JwkFor(key);
+        var message = Encoding.UTF8.GetBytes("short");
+        var signature = key.SignData(message, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+        // 256 bytes long but under 2048 bits: a JWK integer carries no leading zero.
+        var n = key.ExportParameters(false).Modulus!;
+        n[0] &= 0x7F;
+        jwk["n"] = Convert.ToBase64String(n).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         Assert.False(RootHeraldClient.VerifyKeySignature(jwk, message, signature));
     }
 

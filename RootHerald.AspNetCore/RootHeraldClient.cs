@@ -742,8 +742,9 @@ public sealed class RootHeraldClient
         var e = DecodeBase64Url(ReadString(jwk["e"]));
         if (n is null || e is null || e.Length == 0) return false;
         // JWK integers are unsigned big-endian with no leading zero; the
-        // modulus length in bytes is the signature length PKCS#1 demands.
-        if (n.Length < MinRsaModulusBytes || n[0] == 0 || signature.Length != n.Length) return false;
+        // modulus length in bytes is the signature length PKCS#1 demands, and
+        // a clear high bit would make a 256-byte modulus shorter than 2048 bits.
+        if (n.Length < MinRsaModulusBytes || (n[0] & 0x80) == 0 || signature.Length != n.Length) return false;
 
         using var rsa = RSA.Create();
         rsa.ImportParameters(new RSAParameters { Modulus = n, Exponent = e });
@@ -884,13 +885,17 @@ public sealed class RootHeraldClient
             throw Refuse("ExpectedKey");
         if (expectedDevices is not null)
         {
+            // Aliases are GUIDs: the server accepts any spelling and echoes lowercase.
+            var asked = expectedDevices.Select(NormalizeAlias).ToHashSet(StringComparer.Ordinal);
             var echoed = result.Expected?.Devices;
-            if (echoed is null || !echoed.ToHashSet(StringComparer.Ordinal).SetEquals(expectedDevices))
+            if (echoed is null || !echoed.Select(NormalizeAlias).ToHashSet(StringComparer.Ordinal).SetEquals(asked))
                 throw Refuse("ExpectedDevices");
-            if (result.Verdict != RootHerald.AspNetCore.Verdict.Fail && result.DeviceId is { } ueid && !expectedDevices.Contains(ueid))
+            if (result.Verdict != RootHerald.AspNetCore.Verdict.Fail && result.DeviceId is { } ueid && !asked.Contains(NormalizeAlias(ueid)))
                 throw Refuse("ExpectedDevices");
         }
     }
+
+    private static string NormalizeAlias(string alias) => alias.Trim().ToLowerInvariant();
 
     private static string RequireNonEmpty(string value, string field, string paramName)
     {
