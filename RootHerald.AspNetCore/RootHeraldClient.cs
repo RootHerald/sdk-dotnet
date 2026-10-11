@@ -322,7 +322,7 @@ public sealed class RootHeraldClient
     // Marks a 429 as the budget, whatever the body says.
     private const string QuotaHeader = "X-RootHerald-Quota";
 
-    private const int MinRsaModulusBytes = 256;
+    internal const int MinRsaModulusBytes = 256;
 
     private static readonly string[] EcAlgs = ["ES256", "ECDH-ES"];
     private static readonly string[] RsaAlgs = ["RS256", "RSA-OAEP-256"];
@@ -715,6 +715,35 @@ public sealed class RootHeraldClient
             return false;
         }
     }
+
+    /// <summary>
+    /// Encrypts <paramref name="plaintext"/> so that only the device holding
+    /// <paramref name="key"/> can open it, with no call to Root Herald. The
+    /// result is the JWE compact serialization the client's
+    /// <c>RootHeraldDecrypt</c> accepts: <c>ECDH-ES</c> with a fresh ephemeral
+    /// P-256 key per call for an EC key, <c>RSA-OAEP-256</c> for an RSA key,
+    /// <c>A256GCM</c> for both.
+    /// <para>
+    /// Encryption uses the public half, so anyone holding the JWK can encrypt
+    /// to the device; what the chip guarantees is that only it can open the
+    /// result. The key must be a decrypt key (<see cref="KeyPurpose.Decrypt"/>)
+    /// with <c>format</c> <c>jwe</c>: a sign key, a key without a format, a
+    /// curve other than P-256 or an RSA modulus under 2048 bits is
+    /// <see cref="ArgumentException"/>; an <c>apple-ecies</c> key is
+    /// <see cref="EnvelopeFormatNotSupportedException"/>, since a macOS enclave
+    /// key opens Security.framework ECIES, which needs an Apple-side encryptor.
+    /// </para>
+    /// </summary>
+    public static string EncryptToDevice(CertifiedKey key, ReadOnlySpan<byte> plaintext) =>
+        DeviceEnvelope.Encrypt(key, plaintext, DeviceEnvelope.FreshEphemeral, DeviceEnvelope.RandomBytes);
+
+    /// <summary>
+    /// The seam the known-answer tests inject the ephemeral key, CEK and IV
+    /// through; <paramref name="random"/> is asked for the CEK (32 bytes, RSA
+    /// only) and then the IV (12 bytes).
+    /// </summary>
+    internal static string EncryptToDevice(CertifiedKey key, ReadOnlySpan<byte> plaintext, Func<ECDiffieHellman> ephemeral, Func<int, byte[]> random) =>
+        DeviceEnvelope.Encrypt(key, plaintext, ephemeral, random);
 
     private static bool VerifyEs256(JsonObject jwk, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
     {
