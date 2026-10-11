@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -71,6 +72,8 @@ internal static class DeviceEnvelope
             throw new ArgumentException($"jwk.crv \"{ReadString(jwk["crv"])}\" is not P-256; no device certifies another curve", nameof(jwk));
         var x = DecodeCoordinate(jwk, "x");
         var y = DecodeCoordinate(jwk, "y");
+        if (!IsOnP256(x, y))
+            throw new ArgumentException("jwk.x and jwk.y are not a point on P-256", nameof(jwk));
 
         using var recipient = ECDiffieHellman.Create(new ECParameters
         {
@@ -93,6 +96,8 @@ internal static class DeviceEnvelope
         var e = DecodeBase64Url(ReadString(jwk["e"])) ?? throw new ArgumentException("jwk.e is required", nameof(jwk));
         if (e.Length == 0 || n.Length < RootHeraldClient.MinRsaModulusBytes || (n[0] & 0x80) == 0)
             throw new ArgumentException("jwk.n must be a modulus of at least 2048 bits", nameof(jwk));
+        if (new BigInteger(e, isUnsigned: true, isBigEndian: true) < 3)
+            throw new ArgumentException("jwk.e must be at least 3", nameof(jwk));
 
         using var rsa = RSA.Create();
         rsa.ImportParameters(new RSAParameters { Modulus = n, Exponent = e });
@@ -150,6 +155,22 @@ internal static class DeviceEnvelope
         if (raw is not { Length: CoordinateBytes })
             throw new ArgumentException($"jwk.{field} must decode to exactly {CoordinateBytes} bytes", nameof(jwk));
         return raw;
+    }
+
+    private static readonly BigInteger P256Prime = BigInteger.Parse("0ffffffff00000001000000000000000000000000ffffffffffffffffffffffff", System.Globalization.NumberStyles.HexNumber);
+    private static readonly BigInteger P256B = BigInteger.Parse("05ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b", System.Globalization.NumberStyles.HexNumber);
+
+    // Checked in software because the OS import refuses an off-curve point
+    // with a platform-dependent exception type.
+    private static bool IsOnP256(byte[] xBytes, byte[] yBytes)
+    {
+        var x = new BigInteger(xBytes, isUnsigned: true, isBigEndian: true);
+        var y = new BigInteger(yBytes, isUnsigned: true, isBigEndian: true);
+        if (x >= P256Prime || y >= P256Prime) return false;
+        var p = P256Prime;
+        var lhs = y * y % p;
+        var rhs = ((x * x % p * x - 3 * x + P256B) % p + p) % p;
+        return lhs == rhs;
     }
 
     private static byte[] LeftPad(byte[] value, int length)

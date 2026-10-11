@@ -238,7 +238,17 @@ public class EncryptToDeviceTests
         y[31] ^= 0x01;
         jwk["y"] = DeviceEnvelope.Base64Url(y);
 
-        Assert.ThrowsAny<Exception>(() => RootHeraldClient.EncryptToDevice(dec with { Jwk = jwk }, Plaintext));
+        Assert.Throws<ArgumentException>(() => RootHeraldClient.EncryptToDevice(dec with { Jwk = jwk }, Plaintext));
+    }
+
+    [Fact]
+    public void An_ec_coordinate_at_or_above_the_field_prime_is_refused()
+    {
+        var (dec, _) = EcDecryptKey();
+        var jwk = JsonNode.Parse(dec.Jwk.ToJsonString())!.AsObject();
+        jwk["x"] = DeviceEnvelope.Base64Url(Enumerable.Repeat((byte)0xff, 32).ToArray());
+
+        Assert.Throws<ArgumentException>(() => RootHeraldClient.EncryptToDevice(dec with { Jwk = jwk }, Plaintext));
     }
 
     [Fact]
@@ -246,6 +256,19 @@ public class EncryptToDeviceTests
     {
         var (key, _) = RsaDecryptKey(1024);
         Assert.Throws<ArgumentException>(() => RootHeraldClient.EncryptToDevice(key, Plaintext));
+    }
+
+    [Theory]
+    [InlineData("AA")]
+    [InlineData("AQ")]
+    [InlineData("AAI")]
+    public void An_rsa_exponent_below_3_is_refused(string e)
+    {
+        var (key, _) = RsaDecryptKey();
+        var jwk = JsonNode.Parse(key.Jwk.ToJsonString())!.AsObject();
+        jwk["e"] = e;
+
+        Assert.Throws<ArgumentException>(() => RootHeraldClient.EncryptToDevice(key with { Jwk = jwk }, Plaintext));
     }
 
     [Fact]
