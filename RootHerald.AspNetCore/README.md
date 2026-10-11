@@ -219,6 +219,42 @@ signature as bytes. ES256: a 64-byte signature is read as IEEE P1363
 `r || s`, any other length as DER. RS256: PKCS#1 v1.5 over SHA-256, exactly the
 modulus length (256 bytes). It returns false and never throws on malformed input.
 
+## Guarantee only a device can decrypt
+
+Mint a key with `KeyPurpose.Decrypt`, then encrypt to it from the backend;
+only the chip that holds the key opens the result. The private half, locked
+in the chip, signs and decrypts; the public half, in the JWK, verifies and
+encrypts.
+
+```csharp
+var keyChallenge = await rh.IssueKeyChallengeAsync(new KeyChallengeOptions
+{
+    Purpose = KeyPurpose.Decrypt,
+    ExpectedDevices = new[] { result.DeviceId! },
+});
+var key = await rh.CertifyKeyAsync(keyChallenge.Nonce, certification);
+await store.SaveAsync(key.DeviceId, key);
+
+// Later, without any Root Herald call: a session token only this device
+// can read. Send the JWE to the client; its RootHeraldDecrypt opens it.
+var jwe = RootHeraldClient.EncryptToDevice(key, sessionTokenBytes);
+```
+
+`EncryptToDevice(key, plaintext)` returns one JWE compact serialization:
+`ECDH-ES` with a fresh ephemeral P-256 key for an EC key, `RSA-OAEP-256` for
+an RSA key, `A256GCM` for both. Anyone holding the JWK can encrypt to the
+device.
+
+TPM keys (Windows, Linux) have `Format == "jwe"` and are what this method
+encrypts to. A macOS key has `Format == "apple-ecies"` and needs an
+Apple-side encryptor: `EncryptToDevice` throws
+`EnvelopeFormatNotSupportedException` for it. iOS mints no decrypt key. A
+sign key, a key without a format, a curve other than P-256 or an RSA modulus
+under 2048 bits is `ArgumentException`.
+
+A decrypt key minted in 8.1 has an empty auth value: any local process that
+can load the key's blob can open what was sent to it.
+
 ## Errors
 
 An un-enrolled or failing device is a verdict, not an exception. Only

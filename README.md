@@ -6,7 +6,7 @@
 
 | Package | What it does | Where it runs | Status |
 |---|---|---|---|
-| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Backend relay (server → server)** via `RootHeraldClient` — enroll an installation, mint a device-bound key, and appraise a client-collected evidence blob with your `rh_sk_` secret key | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.5`, wire 8.0, not yet on NuGet) |
+| [`RootHerald.AspNetCore`](./RootHerald.AspNetCore) | Backend SDK. **Backend relay (server → server)** via `RootHeraldClient` — enroll an installation, mint a device-bound key, and appraise a client-collected evidence blob with your `rh_sk_` secret key | Backend (any OS .NET runs on) | **Preview** (`0.1.0-preview.6`, wire 8.1, not yet on NuGet) |
 
 ## Quick start: attest (server → server)
 

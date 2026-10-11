@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-preview.6
+
+Wire 8.1. A decrypt key minted with `KeyPurpose.Decrypt` can be encrypted to
+from the backend.
+
+- `RootHeraldClient.EncryptToDevice(CertifiedKey key, ReadOnlySpan<byte>
+  plaintext)` returns the JWE compact serialization the device's
+  `RootHeraldDecrypt` opens: `ECDH-ES` (Concat KDF, fresh ephemeral P-256 key
+  per call) for an EC key, `RSA-OAEP-256` (OAEP SHA-256, MGF1-SHA-256) for an
+  RSA key, `A256GCM` for both, with the protected header as AAD. The header
+  carries `alg`, `enc` and `epk` only. A sign key, a key without a format, a
+  curve other than P-256, a coordinate that is not 32 bytes or an RSA modulus
+  under 2048 bits is `ArgumentException`; an `apple-ecies` key is
+  `EnvelopeFormatNotSupportedException`.
+
 ## 0.1.0-preview.5
 
 Wire 8.0. Every installation of a client has its own attestation key, created

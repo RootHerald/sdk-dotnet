@@ -9,7 +9,7 @@
     <AssemblyName>RootHerald.AspNetCore</AssemblyName>
 
     <PackageId>RootHerald.AspNetCore</PackageId>
-    <Version>0.1.0-preview.5</Version>
+    <Version>0.1.0-preview.6</Version>
     <Authors>Root Herald</Authors>
     <Company>Root Herald</Company>
     <Product>Root Herald ASP.NET Core SDK</Product>
@@ -35,6 +35,10 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RootHerald.AspNetCore.Tests" />
   </ItemGroup>
 
 </Project>
