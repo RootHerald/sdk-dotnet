@@ -274,6 +274,76 @@ public class EncryptToDeviceTests
         Assert.Equal(a, b);
         Assert.Equal(Plaintext, ReferenceDecryptor.Open(a, priv));
     }
+
+    // ── Known-answer vectors from platform Fixtures/envelope ───────────────
+    //
+    // ECDH-ES replays byte for byte with the vector's ephemeral key and IV.
+    // RSA-OAEP-256 draws its OAEP seed inside RSA.Encrypt, so the header, IV,
+    // ciphertext and tag are byte-equal and the encrypted key must unwrap to
+    // the vector's CEK.
+
+    private static JsonObject Vector(string file) =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "envelope", file)))!.AsObject();
+
+    private static byte[] Bytes(JsonObject v, string field) => ReferenceDecryptor.Decode(v[field]!.GetValue<string>());
+
+    private static JsonObject PublicJwk(JsonObject privateJwk)
+    {
+        var kty = privateJwk["kty"]!.GetValue<string>();
+        var jwk = new JsonObject { ["kty"] = kty };
+        foreach (var field in kty == "EC" ? new[] { "crv", "x", "y" } : new[] { "n", "e" })
+            jwk[field] = privateJwk[field]!.GetValue<string>();
+        return jwk;
+    }
+
+    [Fact]
+    public void EcdhEs_vector_replays_byte_for_byte()
+    {
+        var v = Vector("ecdh-es-a256gcm.json");
+        var eph = v["ephemeral"]!.AsObject();
+        var ephParams = new ECParameters
+        {
+            Curve = ECCurve.NamedCurves.nistP256,
+            D = Bytes(eph, "d"),
+            Q = new ECPoint { X = Bytes(eph, "x"), Y = Bytes(eph, "y") },
+        };
+        var key = Key(KeyPurpose.Decrypt, "ECDH-ES", "jwe", PublicJwk(v["recipient"]!.AsObject()));
+
+        var jwe = RootHeraldClient.EncryptToDevice(key, Bytes(v, "plaintext"), () => ECDiffieHellman.Create(ephParams),
+            n => n == 12 ? Bytes(v, "iv") : throw new InvalidOperationException($"ECDH-ES drew {n} random bytes"));
+
+        Assert.Equal(v["jwe"]!.GetValue<string>(), jwe);
+    }
+
+    [Fact]
+    public void RsaOaep256_vector_replays_except_the_oaep_seed()
+    {
+        var v = Vector("rsa-oaep-256-a256gcm.json");
+        var r = v["recipient"]!.AsObject();
+        var key = Key(KeyPurpose.Decrypt, "RSA-OAEP-256", "jwe", PublicJwk(r));
+
+        var jwe = RootHeraldClient.EncryptToDevice(key, Bytes(v, "plaintext"), () => throw new InvalidOperationException("RSA drew an ephemeral key"),
+            n => n switch { 32 => Bytes(v, "cek"), 12 => Bytes(v, "iv"), _ => throw new InvalidOperationException($"drew {n} random bytes") });
+
+        var expected = v["jwe"]!.GetValue<string>().Split('.');
+        var actual = jwe.Split('.');
+        Assert.Equal(expected[0], actual[0]);
+        Assert.Equal(expected[2], actual[2]);
+        Assert.Equal(expected[3], actual[3]);
+        Assert.Equal(expected[4], actual[4]);
+        using var rsa = RSA.Create(new RSAParameters
+        {
+            Modulus = Bytes(r, "n"),
+            Exponent = Bytes(r, "e"),
+            D = Bytes(r, "d"),
+            P = Bytes(r, "p"),
+            Q = Bytes(r, "q"),
+            DP = Bytes(r, "dp"),
+            DQ = Bytes(r, "dq"),
+            InverseQ = Bytes(r, "qi"),
+        });
+        Assert.Equal(Bytes(v, "cek"), rsa.Decrypt(ReferenceDecryptor.Decode(actual[1]), RSAEncryptionPadding.OaepSHA256));
+    }
 }
 
 /// <summary>
