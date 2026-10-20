@@ -65,11 +65,7 @@ var enroll = await rh.RelayEnrollAsync(JsonNode.Parse(body)!.AsObject());
 
 // Hand enroll.Challenge to the client's EnrollComplete() verbatim; then relay
 // its output, leg 2.
-var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
-{
-    EnrollmentId    = clientResult.EnrollmentId,
-    DecryptedSecret = clientResult.DecryptedSecret, // Signature on macOS
-});
+var activated = await rh.RelayActivateAsync(JsonSerializer.Deserialize<EnrollActivationResponse>(body)!);
 // activated.DeviceId is the stable id you map to your user. It is yours, not
 // the device's: never relay it back.
 ```
