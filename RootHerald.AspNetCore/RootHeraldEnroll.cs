@@ -199,7 +199,8 @@ public sealed record EnrollActivationChallenge
 /// <c>EnrollComplete()</c> and the body of <c>POST /api/v1/attest/activate</c>.
 /// The proof is per platform: a TPM returns the secret it released inside
 /// <c>TPM2_ActivateCredential</c>; a Secure Enclave returns a signature over
-/// <see cref="EnrollActivationChallenge.ChallengeNonce"/>.
+/// <see cref="EnrollActivationChallenge.ChallengeNonce"/>. On an AWS NitroTPM the
+/// TPM proof also carries one of the two Nitro members.
 /// </summary>
 public sealed record EnrollActivationResponse
 {
@@ -222,6 +223,16 @@ public sealed record EnrollActivationResponse
     [JsonPropertyName("signature")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Signature { get; init; }
+
+    /// <summary>base64 COSE_Sign1 NitroTPM attestation document. AWS only; relayed unread.</summary>
+    [JsonPropertyName("nitroAttestationDocument")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? NitroAttestationDocument { get; init; }
+
+    /// <summary>The client's report that the document request failed, relayed as the client wrote it.</summary>
+    [JsonPropertyName("nitroDocumentError")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? NitroDocumentError { get; init; }
 }
 
 /// <summary>

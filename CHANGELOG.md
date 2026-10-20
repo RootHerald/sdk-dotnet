@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-preview.7
+
+`EnrollActivationResponse` carries `NitroAttestationDocument` and
+`NitroDocumentError`, relayed unread, so an AWS NitroTPM enrollment through
+`RelayActivateAsync` reaches the server whole. The wire version does not
+change.
+
 ## 0.1.0-preview.6
 
 Wire 8.1. A decrypt key minted with `KeyPurpose.Decrypt` can be encrypted to

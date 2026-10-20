@@ -584,7 +584,8 @@ public class RootHeraldBackgroundCheckClientTests
         var body = Assert.IsType<JsonObject>(handler.LastBody);
         Assert.Equal("enr_1", body["enrollmentId"]?.GetValue<string>());
         Assert.Equal("secret", body["decryptedSecret"]?.GetValue<string>());
-        foreach (var k in new[] { "deviceId", "challengeId", "akPublicKey", "signature" })
+        foreach (var k in new[] { "deviceId", "challengeId", "akPublicKey", "signature",
+                                  "nitroAttestationDocument", "nitroDocumentError" })
             Assert.False(body.ContainsKey(k), $"{k} was sent on activate");
     }
 
@@ -642,5 +643,86 @@ public class RootHeraldBackgroundCheckClientTests
                 EnrollmentId = "enr_1",
                 DecryptedSecret = "secret",
             }));
+    }
+
+    private static async Task<JsonObject> RelayClientActivateBody(string clientBody)
+    {
+        var (client, handler) = Make();
+        handler.Enqueue(HttpStatusCode.OK, """{"deviceId":"dev_42","status":"enrolled"}""");
+        var activation = System.Text.Json.JsonSerializer.Deserialize<EnrollActivationResponse>(clientBody)!;
+
+        await client.RelayActivateAsync(activation);
+
+        return Assert.IsType<JsonObject>(handler.LastBody);
+    }
+
+    // The default encoder escapes '+' on the wire, so values are compared decoded.
+    private const string NitroDocument = "hEShATgioFkQ+a/b==";
+
+    [Fact]
+    public async Task RelayActivateAsync_relays_the_nitro_document()
+    {
+        var body = await RelayClientActivateBody(
+            $$"""{"enrollmentId":"enr_1","decryptedSecret":"secret","nitroAttestationDocument":"{{NitroDocument}}"}""");
+
+        Assert.Equal(NitroDocument, body["nitroAttestationDocument"]?.GetValue<string>(), StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task RelayActivateAsync_relays_the_nitro_document_error_unread()
+    {
+        const string clientBody = """
+            {
+              "enrollmentId": "enr_1",
+              "decryptedSecret": "secret",
+              "nitroDocumentError": { "stage": "nv_define_space", "tpmRc": 725, "responseShape": "short", "futureField": [1] }
+            }
+            """;
+
+        var body = await RelayClientActivateBody(clientBody);
+
+        var sent = JsonNode.Parse(clientBody)!["nitroDocumentError"];
+        Assert.True(JsonNode.DeepEquals(sent, body["nitroDocumentError"]),
+            $"nitroDocumentError was not relayed as written: {body["nitroDocumentError"]}");
+    }
+
+    [Fact]
+    public async Task RelayActivateAsync_plain_body_carries_no_nitro_members()
+    {
+        const string clientBody = """{"enrollmentId":"enr_1","decryptedSecret":"secret"}""";
+
+        var body = await RelayClientActivateBody(clientBody);
+
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(clientBody), body), $"posted {body}");
+    }
+
+    [Fact]
+    public async Task RelayActivateAsync_null_nitro_error_is_not_invented()
+    {
+        var body = await RelayClientActivateBody(
+            """{"enrollmentId":"enr_1","decryptedSecret":"secret","nitroDocumentError":null}""");
+
+        Assert.False(body.ContainsKey("nitroDocumentError"), $"posted {body}");
+    }
+
+    [Fact]
+    public async Task RelayActivateAsync_does_not_relay_unknown_members()
+    {
+        var body = await RelayClientActivateBody(
+            $$"""{"enrollmentId":"enr_1","decryptedSecret":"secret","nitroAttestationDocument":"{{NitroDocument}}","accountId":"123456789012","futureTop":1}""");
+
+        var keys = body.Select(member => member.Key).Order(StringComparer.Ordinal);
+        Assert.Equal(new[] { "decryptedSecret", "enrollmentId", "nitroAttestationDocument" }, keys);
+    }
+
+    [Fact]
+    public async Task RelayActivateAsync_nitro_document_is_not_a_proof()
+    {
+        var (client, handler) = Make();
+        var activation = System.Text.Json.JsonSerializer.Deserialize<EnrollActivationResponse>(
+            """{"enrollmentId":"enr_1","nitroAttestationDocument":"doc"}""")!;
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.RelayActivateAsync(activation));
+        Assert.Equal(0, handler.RequestCount);
     }
 }

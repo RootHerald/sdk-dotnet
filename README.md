@@ -19,6 +19,7 @@ which appraises it with Root Herald using your `rh_sk_` secret key. The client
 never holds a key or talks to Root Herald.
 
 ```csharp
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using RootHerald.AspNetCore;
 
@@ -61,15 +62,11 @@ run.
 
 ```csharp
 // Leg 1 — relay the client's EnrollBegin() body as your endpoint received it.
-var enroll = await rh.RelayEnrollAsync(JsonNode.Parse(body)!.AsObject());
+var enroll = await rh.RelayEnrollAsync(JsonNode.Parse(enrollBody)!.AsObject());
 
 // Hand enroll.Challenge to the client's EnrollComplete() verbatim; then relay
 // its output, leg 2.
-var activated = await rh.RelayActivateAsync(new EnrollActivationResponse
-{
-    EnrollmentId    = clientResult.EnrollmentId,
-    DecryptedSecret = clientResult.DecryptedSecret, // Signature on macOS
-});
+var activated = await rh.RelayActivateAsync(JsonSerializer.Deserialize<EnrollActivationResponse>(activateBody)!);
 // activated.DeviceId is the stable id you map to your user. It is yours, not
 // the device's: never relay it back.
 ```
